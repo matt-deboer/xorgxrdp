@@ -185,6 +185,58 @@ xorgxrdpRRScreenSetSize(ScreenPtr pScreen, CARD16 width, CARD16 height,
     return rv;
 }
 
+static OsTimerPtr g_timer = 0;
+
+/*****************************************************************************/
+static void
+xorgxrdpDamageReport(DamagePtr pDamage, RegionPtr pRegion, void *closure)
+{
+    rdpPtr dev;
+    ScreenPtr pScreen;
+
+    LLOGLN(10, ("xorgxrdpDamageReport:"));
+    pScreen = (ScreenPtr)closure;
+    dev = rdpGetDevFromScreen(pScreen);
+    rdpClientConAddAllReg(dev, pRegion, &(pScreen->root->drawable));
+}
+
+/*****************************************************************************/
+static void
+xorgxrdpDamageDestroy(DamagePtr pDamage, void *closure)
+{
+    LLOGLN(0, ("xorgxrdpDamageDestroy:"));
+}
+
+/******************************************************************************/
+/* returns error */
+static CARD32
+xorgxrdpDeferredStartup(OsTimerPtr timer, CARD32 now, pointer arg)
+{
+    rdpPtr dev;
+    ScreenPtr pScreen;
+
+    LLOGLN(0, ("xorgxrdpDeferredStartup:"));
+    pScreen = (ScreenPtr)arg;
+    if (pScreen->root != NULL)
+    {
+        dev = rdpGetDevFromScreen(pScreen);
+        dev->damage = DamageCreate(xorgxrdpDamageReport, xorgxrdpDamageDestroy,
+                                   DamageReportRawRegion, TRUE,
+                                   pScreen, pScreen);
+        if (dev->damage != NULL)
+        {
+            DamageSetReportAfterOp(dev->damage, TRUE);
+            DamageRegister(&(pScreen->root->drawable), dev->damage);
+            LLOGLN(0, ("xorgxrdpSetupDamage: DamageRegister ok"));
+            TimerFree(g_timer);
+            g_timer = NULL;
+            return 0;
+        }
+    }
+    g_timer = TimerSet(g_timer, 0, 100, xorgxrdpDeferredStartup, pScreen);
+    return 0;
+}
+
 /*****************************************************************************/
 static Bool
 xorgxrdpScreenInit(ScreenPtr pScreen, int argc, char** argv)
@@ -290,6 +342,8 @@ xorgxrdpScreenInit(ScreenPtr pScreen, int argc, char** argv)
             dev->rrSetPanning         = pRRScrPriv->rrSetPanning;
             pRRScrPriv->rrScreenSetSize = xorgxrdpRRScreenSetSize;
         }
+
+        g_timer = TimerSet(g_timer, 0, 100, xorgxrdpDeferredStartup, pScreen);
 
     }
     return rv;
