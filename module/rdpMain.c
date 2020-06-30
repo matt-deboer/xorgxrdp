@@ -351,6 +351,39 @@ xorgxrdpScreenInit(ScreenPtr pScreen, int argc, char** argv)
 
 /*****************************************************************************/
 static Bool
+xorgxrdpPciProbe(struct _DriverRec * drv, int entity_num,
+                 struct pci_device * dev, intptr_t match_data)
+{
+    Bool rv;
+    LLOGLN(0, ("xorgxrdpPciProbe:"));
+    rv = g_saved_driver.PciProbe(drv, entity_num, dev, match_data);
+    if (rv)
+    {
+        if ((xf86Screens != NULL) && (xf86Screens[0] != NULL))
+        {
+            if ((xf86Screens[0]->PreInit != NULL) &&
+                (xf86Screens[0]->ScreenInit != NULL))
+            {
+                g_orgPreInit = xf86Screens[0]->PreInit;
+                xf86Screens[0]->PreInit = xorgxrdpPreInit;
+                g_orgScreenInit = xf86Screens[0]->ScreenInit;
+                xf86Screens[0]->ScreenInit = xorgxrdpScreenInit;
+            }
+            else
+            {
+                LLOGLN(0, ("xorgxrdpPciProbe: error"));
+            }
+        }
+        else
+        {
+            LLOGLN(0, ("xorgxrdpPciProbe: error"));
+        }
+    }
+    return rv;
+}
+
+/*****************************************************************************/
+static Bool
 xorgxrdpPlatformProbe(struct _DriverRec * drv, int entity_num, int flags,
                       struct xf86_platform_device * dev, intptr_t match_data)
 {
@@ -423,6 +456,7 @@ xorgxrdpCheckWrap(void)
         g_saved_driver = *(xf86DriverList[0]);
         g_nvidia_wrap_done = TRUE;
         LLOGLN(0, ("xorgxrdpCheckWrap: NVIDIA driver found"));
+        xf86DriverList[0]->PciProbe = xorgxrdpPciProbe;
         xf86DriverList[0]->platformProbe = xorgxrdpPlatformProbe;
         xf86DriverList[0]->driverFunc = xorgxrdpDriverFunc;
     }
