@@ -75,8 +75,10 @@ static Bool g_initialised = FALSE;
 static Bool g_nvidia_wrap_done = FALSE;
 static DriverRec g_saved_driver;
 
-static xf86PreInitProc *g_orgPreInit;
-static xf86ScreenInitProc *g_orgScreenInit;
+static xf86PreInitProc *g_orgPreInit = NULL;
+static xf86ScreenInitProc *g_orgScreenInit = NULL;
+
+static OsTimerPtr g_timer = NULL;
 
 extern DriverPtr *xf86DriverList;
 extern int xf86NumDrivers;
@@ -150,6 +152,8 @@ rdpCreateScreenResources(ScreenPtr pScreen)
                                                 dev->depth,
                                                 CREATE_PIXMAP_USAGE_SHARED);
     dev->pfbMemory = dev->screenSwPixmap->devPrivate.ptr;
+    dev->paddedWidthInBytes = dev->screenSwPixmap->devKind;
+    dev->sizeInBytes = dev->paddedWidthInBytes * dev->height;
     return TRUE;
 }
 
@@ -172,8 +176,6 @@ xorgxrdpRRScreenSetSize(ScreenPtr pScreen, CARD16 width, CARD16 height,
 
     dev->width = width;
     dev->height = height;
-    dev->paddedWidthInBytes = PixmapBytePad(dev->width, dev->depth);
-    dev->sizeInBytes = dev->paddedWidthInBytes * dev->height;
 
     pScreen->DestroyPixmap(dev->screenSwPixmap);
     dev->screenSwPixmap = pScreen->CreatePixmap(pScreen,
@@ -181,11 +183,10 @@ xorgxrdpRRScreenSetSize(ScreenPtr pScreen, CARD16 width, CARD16 height,
                                                 dev->depth,
                                                 CREATE_PIXMAP_USAGE_SHARED);
     dev->pfbMemory = dev->screenSwPixmap->devPrivate.ptr;
-
+    dev->paddedWidthInBytes = dev->screenSwPixmap->devKind;
+    dev->sizeInBytes = dev->paddedWidthInBytes * dev->height;
     return rv;
 }
-
-static OsTimerPtr g_timer = 0;
 
 /*****************************************************************************/
 static void
@@ -351,13 +352,9 @@ xorgxrdpScreenInit(ScreenPtr pScreen, int argc, char** argv)
 
 /*****************************************************************************/
 static Bool
-xorgxrdpPciProbe(struct _DriverRec * drv, int entity_num,
-                 struct pci_device * dev, intptr_t match_data)
+xorgxrdpWrapPreIntScreenInit(Bool ok)
 {
-    Bool rv;
-    LLOGLN(0, ("xorgxrdpPciProbe:"));
-    rv = g_saved_driver.PciProbe(drv, entity_num, dev, match_data);
-    if (rv)
+    if (ok)
     {
         if ((xf86Screens != NULL) && (xf86Screens[0] != NULL))
         {
@@ -371,15 +368,27 @@ xorgxrdpPciProbe(struct _DriverRec * drv, int entity_num,
             }
             else
             {
-                LLOGLN(0, ("xorgxrdpPciProbe: error"));
+                LLOGLN(0, ("xorgxrdpWrapPreIntScreenInit: error"));
             }
         }
         else
         {
-            LLOGLN(0, ("xorgxrdpPciProbe: error"));
+            LLOGLN(0, ("xorgxrdpWrapPreIntScreenInit: error"));
         }
     }
-    return rv;
+    return ok;
+}
+
+/*****************************************************************************/
+static Bool
+xorgxrdpPciProbe(struct _DriverRec * drv, int entity_num,
+                 struct pci_device * dev, intptr_t match_data)
+{
+    Bool rv;
+
+    LLOGLN(0, ("xorgxrdpPciProbe:"));
+    rv = g_saved_driver.PciProbe(drv, entity_num, dev, match_data);
+    return xorgxrdpWrapPreIntScreenInit(rv);
 }
 
 /*****************************************************************************/
@@ -391,29 +400,7 @@ xorgxrdpPlatformProbe(struct _DriverRec * drv, int entity_num, int flags,
 
     LLOGLN(0, ("xorgxrdpPlatformProbe:"));
     rv = g_saved_driver.platformProbe(drv, entity_num, flags, dev, match_data);
-    if (rv)
-    {
-        if ((xf86Screens != NULL) && (xf86Screens[0] != NULL))
-        {
-            if ((xf86Screens[0]->PreInit != NULL) &&
-                (xf86Screens[0]->ScreenInit != NULL))
-            {
-                g_orgPreInit = xf86Screens[0]->PreInit;
-                xf86Screens[0]->PreInit = xorgxrdpPreInit;
-                g_orgScreenInit = xf86Screens[0]->ScreenInit;
-                xf86Screens[0]->ScreenInit = xorgxrdpScreenInit;
-            }
-            else
-            {
-                LLOGLN(0, ("xorgxrdpPlatformProbe: error"));
-            }
-        }
-        else
-        {
-            LLOGLN(0, ("xorgxrdpPlatformProbe: error"));
-        }
-    }
-    return rv;
+    return xorgxrdpWrapPreIntScreenInit(rv);
 }
 
 /*****************************************************************************/
