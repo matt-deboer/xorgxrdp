@@ -158,7 +158,7 @@ rdpCreateScreenResources(ScreenPtr pScreen)
 }
 
 /******************************************************************************/
-Bool
+static Bool
 xorgxrdpRRScreenSetSize(ScreenPtr pScreen, CARD16 width, CARD16 height,
                         CARD32 mmWidth, CARD32 mmHeight)
 {
@@ -354,7 +354,7 @@ xorgxrdpScreenInit(ScreenPtr pScreen, int argc, char** argv)
 static Bool
 xorgxrdpWrapPreIntScreenInit(Bool ok)
 {
-    if (ok)
+    if (ok && (g_orgPreInit == NULL))
     {
         if ((xf86Screens != NULL) && (xf86Screens[0] != NULL))
         {
