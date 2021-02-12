@@ -872,8 +872,8 @@ rdpClientConProcessMsgClientInfo(rdpPtr dev, rdpClientCon *clientCon)
     else if (clientCon->client_info.capture_code == 3) /* H264 */
     {
         LLOGLN(0, ("rdpClientConProcessMsgClientInfo: got H264 capture"));
-        clientCon->cap_width = clientCon->rdp_width;
-        clientCon->cap_height = clientCon->rdp_height;
+        clientCon->cap_width = RDPALIGN(clientCon->rdp_width, 16);
+        clientCon->cap_height = RDPALIGN(clientCon->rdp_height, 16);
         LLOGLN(0, ("  cap_width %d cap_height %d",
                clientCon->cap_width, clientCon->cap_height));
         if (clientCon->shmemptr != 0)
