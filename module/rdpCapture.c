@@ -45,6 +45,10 @@ capture
 #include "rdpMisc.h"
 #include "rdpCapture.h"
 
+#include "wyhash.h"
+/* hex digits of pi as a 64 bit int */
+#define WYHASH_SEED 0x3243f6a8885a308dull
+
 #if defined(XORGXRDP_GLAMOR)
 #include "rdpEgl.h"
 #include <glamor.h>
@@ -570,6 +574,31 @@ rdpCopyBox_a8r8g8b8_to_nv12(rdpClientCon *clientCon,
 }
 
 /******************************************************************************/
+static void
+wyhash_rfx_tile_rows(const uint8_t *src, int src_stride, int x, int y,
+    uint64_t *row_hashes, int nrows)
+{
+    int row;
+    const uint8_t *s8;
+
+    for(row = 0; row < nrows; row++)
+    {
+        s8 = src + (y+row) * src_stride + x * 4;
+        row_hashes[row] = wyhash((const void*)s8, 64 * 4, WYHASH_SEED, _wyp);
+    }
+}
+
+/******************************************************************************/
+static uint64_t
+wyhash_rfx_tile_from_rows(const uint64_t *tile_rows, int tile_row_stride, 
+                          int x, int y)
+{
+    const uint64_t *row_hashes;
+    row_hashes = tile_rows + (x / 64) * tile_row_stride + y;
+    return wyhash((const void*)row_hashes, 64*sizeof(uint64_t), WYHASH_SEED, _wyp);
+}
+
+/******************************************************************************/
 static Bool
 rdpCapture0(rdpClientCon *clientCon, RegionPtr in_reg, BoxPtr *out_rects,
             int *num_out_rects, struct image_data *id)
@@ -811,13 +840,15 @@ rdpCapture1(rdpClientCon *clientCon, RegionPtr in_reg, BoxPtr *out_rects,
 /******************************************************************************/
 static Bool
 rdpCapture2(rdpClientCon *clientCon, RegionPtr in_reg, BoxPtr *out_rects,
-            int *num_out_rects, struct image_data *id)
+            int *num_out_rects, BoxPtr scroll_rect, short *scroll_offset,
+            struct image_data *id)
 {
     int x;
     int y;
     int out_rect_index;
     int num_rects;
     int rcode;
+    int in_scroll_rect;
     BoxRec rect;
     BoxRec extents_rect;
     BoxPtr rects;
@@ -829,8 +860,13 @@ rdpCapture2(rdpClientCon *clientCon, RegionPtr in_reg, BoxPtr *out_rects,
     int dst_stride;
     int crc_offset;
     int crc_stride;
-    int crc;
+    uint64_t crc;
     int num_crcs;
+    int num_skips;
+    int tile_row_stride, crc_height;
+    int num_diff_first_rows;
+    uint64_t *row_hashes;
+    uint64_t old_first_row, new_first_row;
 
     LLOGLN(10, ("rdpCapture2:"));
 
@@ -845,6 +881,7 @@ rdpCapture2(rdpClientCon *clientCon, RegionPtr in_reg, BoxPtr *out_rects,
         return FALSE;
     }
     out_rect_index = 0;
+    extents_rect = *rdpRegionExtents(in_reg);
 
     src = id->pixels;
     dst = id->shmem_pixels;
@@ -852,17 +889,63 @@ rdpCapture2(rdpClientCon *clientCon, RegionPtr in_reg, BoxPtr *out_rects,
     dst_stride = clientCon->cap_stride_bytes;
 
     crc_stride = (clientCon->dev->width + 63) / 64;
-    num_crcs = crc_stride * ((clientCon->dev->height + 63) / 64);
+    /* tile rows are column-major */
+    tile_row_stride = ((clientCon->dev->height + 63) / 64) * 64;
+    crc_height = ((clientCon->dev->height + 63) / 64);
+    num_crcs = crc_stride * crc_height;
     if (num_crcs != clientCon->num_rfx_crcs_alloc)
     {
-        /* resize the crc list */
+        /* resize the hash list */
         clientCon->num_rfx_crcs_alloc = num_crcs;
         free(clientCon->rfx_crcs);
-        clientCon->rfx_crcs = g_new0(int, num_crcs);
+        free(clientCon->rfx_tile_row_hashes);
+        clientCon->rfx_crcs = g_new0(uint64_t, num_crcs);
+        clientCon->rfx_tile_row_hashes = g_new0(uint64_t, num_crcs * 64);
     }
 
-    extents_rect = *rdpRegionExtents(in_reg);
+    /* update the tile row hashes. Column major order to be kind to 
+       prefetchers even though it shouldn't matter much */
+    num_diff_first_rows = 0;
+    x = extents_rect.x1 & ~63;
+    while (x < extents_rect.x2)
+    {
+        y = extents_rect.y1 & ~63;
+        while (y < extents_rect.y2)
+        {
+            rect.x1 = x;
+            rect.y1 = y;
+            rect.x2 = rect.x1 + 64;
+            rect.y2 = rect.y1 + 64;
+            rcode = rdpRegionContainsRect(in_reg, &rect);
+            if (rcode == rgnIN)
+            {
+                row_hashes = clientCon->rfx_tile_row_hashes + 
+                    (x / 64) * tile_row_stride + y;
+                old_first_row = row_hashes[0];
+                wyhash_rfx_tile_rows(src, src_stride, x, y, row_hashes, 64);
+                new_first_row = row_hashes[0];
+                num_diff_first_rows += (old_first_row != new_first_row);
+            }
+            y += 64;
+        }
+        x += 64;
+    }
+
+    *scroll_offset = 0;
+    scroll_rect->x1 = 0;
+    scroll_rect->x2 = 0;
+    scroll_rect->y1 = 0;
+    scroll_rect->y2 = 0;
+
+    *out_rects = g_new(BoxRec, RDP_MAX_TILES);
+    if (*out_rects == NULL)
+    {
+        return FALSE;
+    }
+    out_rect_index = 0;
+
     y = extents_rect.y1 & ~63;
+    num_skips = 0;
     while (y < extents_rect.y2)
     {
         x = extents_rect.x1 & ~63;
@@ -875,9 +958,14 @@ rdpCapture2(rdpClientCon *clientCon, RegionPtr in_reg, BoxPtr *out_rects,
             rcode = rdpRegionContainsRect(in_reg, &rect);
             LLOGLN(10, ("rdpCapture2: rcode %d", rcode));
 
+            in_scroll_rect = (rect.x1 >= scroll_rect->x1) 
+                && (rect.x2 <= scroll_rect->x2) 
+                && (rect.y1 >= scroll_rect->y1) 
+                && (rect.y2 <= scroll_rect->y2);
+
             if (rcode != rgnOUT)
             {
-                crc = crc_start();
+                /* hex digits of pi as a 64 bit int */
                 if (rcode == rgnPART)
                 {
                     LLOGLN(10, ("rdpCapture2: rgnPART"));
@@ -886,42 +974,51 @@ rdpCapture2(rdpClientCon *clientCon, RegionPtr in_reg, BoxPtr *out_rects,
                     rdpRegionIntersect(&tile_reg, in_reg, &tile_reg);
                     rects = REGION_RECTS(&tile_reg);
                     num_rects = REGION_NUM_RECTS(&tile_reg);
-                    crc = crc_process_data(crc, rects,
-                                           num_rects * sizeof(BoxRec));
+                    crc = wyhash((const void*)rects, num_rects * sizeof(BoxRec), 
+                        crc, _wyp);
                     rdpCopyBox_a8r8g8b8_to_yuvalp(x, y,
                                                   src, src_stride,
                                                   dst, dst_stride,
                                                   rects, num_rects);
+                    crc_dst = dst + (y << 8) * (dst_stride >> 8) + (x << 8);
+                    crc = 0x3243f6a8885a308dull;
+                    crc = wyhash((const void*)crc_dst, 64 * 64 * 4, crc, _wyp);
                     rdpRegionUninit(&tile_reg);
                 }
                 else /* rgnIN */
                 {
                     LLOGLN(10, ("rdpCapture2: rgnIN"));
-                    rdpCopyBox_a8r8g8b8_to_yuvalp(x, y,
-                                                  src, src_stride,
-                                                  dst, dst_stride,
-                                                  &rect, 1);
+                    crc = wyhash_rfx_tile_from_rows(
+                        clientCon->rfx_tile_row_hashes, tile_row_stride, x, y);
+
                 }
-                crc_dst = dst + (y << 8) * (dst_stride >> 8) + (x << 8);
-                crc = crc_process_data(crc, crc_dst, 64 * 64 * 4);
-                crc = crc_end(crc);
                 crc_offset = (y / 64) * crc_stride + (x / 64);
-                LLOGLN(10, ("rdpCapture2: crc 0x%8.8x 0x%8.8x",
-                       crc, clientCon->rfx_crcs[crc_offset]));
                 if (crc == clientCon->rfx_crcs[crc_offset])
                 {
                     LLOGLN(10, ("rdpCapture2: crc skip at x %d y %d", x, y));
+                    num_skips += 1;
                 }
                 else
                 {
                     clientCon->rfx_crcs[crc_offset] = crc;
-                    (*out_rects)[out_rect_index] = rect;
-                    out_rect_index++;
-                    if (out_rect_index >= RDP_MAX_TILES)
+                    if(!in_scroll_rect)
                     {
-                        free(*out_rects);
-                        *out_rects = NULL;
-                        return FALSE;
+                        /* lazily only do this if hash wasn't identical */
+                        if (rcode != rgnPART)
+                        {
+                            rdpCopyBox_a8r8g8b8_to_yuvalp(x, y,
+                                  src, src_stride,
+                                  dst, dst_stride,
+                                  &rect, 1);
+                        }
+                        (*out_rects)[out_rect_index] = rect;
+                        out_rect_index++;
+                        if (out_rect_index >= RDP_MAX_TILES)
+                        {
+                            free(*out_rects);
+                            *out_rects = NULL;
+                            return FALSE;
+                        }
                     }
                 }
             }
@@ -1083,7 +1180,8 @@ copy_vmem(rdpPtr dev, RegionPtr in_reg)
  *****************************************************************************/
 Bool
 rdpCapture(rdpClientCon *clientCon, RegionPtr in_reg, BoxPtr *out_rects,
-           int *num_out_rects, struct image_data *id)
+           int *num_out_rects, BoxPtr scroll_rect, short *scroll_offset,
+           struct image_data *id)
 {
     int mode;
 
@@ -1103,13 +1201,17 @@ rdpCapture(rdpClientCon *clientCon, RegionPtr in_reg, BoxPtr *out_rects,
     switch (mode)
     {
         case 0:
+            *scroll_offset = 0;
             return rdpCapture0(clientCon, in_reg, out_rects, num_out_rects, id);
         case 1:
+            *scroll_offset = 0;
             return rdpCapture1(clientCon, in_reg, out_rects, num_out_rects, id);
         case 2:
             /* used for remotefx capture */
-            return rdpCapture2(clientCon, in_reg, out_rects, num_out_rects, id);
+            return rdpCapture2(clientCon, in_reg, out_rects, num_out_rects,
+                scroll_rect, scroll_offset, id);
         case 3:
+            *scroll_offset = 0;
             /* used for even align capture */
             return rdpCapture3(clientCon, in_reg, out_rects, num_out_rects, id);
         default:
