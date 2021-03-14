@@ -50,11 +50,11 @@ struct rdpup_os_bitmap
 };
 
 enum shared_memory_status {
-    SMS_UNINITIALIZED = 0,
-    SMS_RESIZING,
-    SMS_ACTIVE,
-    SMS_RFX_ACTIVE,
-    SMS_H264_ACTIVE
+    SHM_UNINITIALIZED = 0,
+    SHM_RESIZING,
+    SHM_ACTIVE,
+    SHM_RFX_ACTIVE,
+    SHM_H264_ACTIVE
 };
 
 /* one of these for each client */
