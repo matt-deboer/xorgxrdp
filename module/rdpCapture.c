@@ -630,6 +630,47 @@ a8r8g8b8_to_nv12_709fr_box(const uint8_t *s8, int src_stride,
 }
 
 /******************************************************************************/
+int
+a8r8g8b8_to_yuv444_709fr_box(const uint8_t *s8, int src_stride,
+                             uint8_t *d8, int dst_stride,
+                             int width, int height)
+{
+    int index;
+    int jndex;
+    int R;
+    int G;
+    int B;
+    int Y;
+    int U;
+    int V;
+    int pixel;
+    const uint32_t *s32;
+    uint32_t *d32;
+
+    for (jndex = 0; jndex < height; jndex++)
+    {
+        s32 = (const uint32_t *) (s8 + src_stride * jndex);
+        d32 = (uint32_t *) (d8 + dst_stride * jndex);
+        for (index = 0; index < width; index++)
+        {
+            pixel = s32[0];
+            s32++;
+            R = (pixel >> 16) & 0xff;
+            G = (pixel >>  8) & 0xff;
+            B = (pixel >>  0) & 0xff;
+            Y =  ( 54 * R + 183 * G +  18 * B) >> 8;
+            U = ((-29 * R -  99 * G + 128 * B) >> 8) + 128;
+            V = ((128 * R - 116 * G -  12 * B) >> 8) + 128;
+            d32[0] = (RDPCLAMP(Y, 0, 255) << 16) |
+                     (RDPCLAMP(U, 0, 255) << 8) |
+                      RDPCLAMP(V, 0, 255);
+            d32++;
+        }
+    }
+    return 0;
+}
+
+/******************************************************************************/
 /* copy rects with no error checking */
 static int
 rdpCopyBox_a8r8g8b8_to_nv12(rdpClientCon *clientCon,
@@ -701,6 +742,39 @@ rdpCopyBox_a8r8g8b8_to_nv12_709fr(rdpClientCon *clientCon,
                                                    d8_y, dst_stride_y,
                                                    d8_uv, dst_stride_uv,
                                                    width, height);
+    }
+    return 0;
+}
+
+/******************************************************************************/
+/* copy rects with no error checking */
+static int
+rdpCopyBox_a8r8g8b8_to_yuv444_709fr(rdpClientCon *clientCon,
+                                    const uint8_t *src, int src_stride,
+                                    int srcx, int srcy,
+                                    uint8_t *dst, int dst_stride,
+                                    int dstx, int dsty,
+                                    BoxPtr rects, int num_rects)
+{
+    const uint8_t *s8;
+    uint8_t *d8;
+    int index;
+    int width;
+    int height;
+    BoxPtr box;
+
+    for (index = 0; index < num_rects; index++)
+    {
+        box = rects + index;
+        s8 = src + (box->y1 - srcy) * src_stride;
+        s8 += (box->x1 - srcx) * 4;
+        d8 = dst + (box->y1 - dsty) * dst_stride;
+        d8 += (box->x1 - dstx) * 4;
+        width = box->x2 - box->x1;
+        height = box->y2 - box->y1;
+        a8r8g8b8_to_yuv444_709fr_box(s8, src_stride,
+                                     d8, dst_stride,
+                                     width, height);
     }
     return 0;
 }
@@ -1133,6 +1207,14 @@ rdpCapture3(rdpClientCon *clientCon, RegionPtr in_reg, BoxPtr *out_rects,
                                         src, src_stride, 0, 0,
                                         dst, dst_stride, 0, 0,
                                         *out_rects, num_rects);
+    }
+    else if (dst_format == XRDP_yuv444_709fr)
+    {
+        rdpCopyBox_a8r8g8b8_to_yuv444_709fr(clientCon,
+                                            src, src_stride, 0, 0,
+                                            dst, dst_stride,
+                                            0, 0,
+                                            *out_rects, num_rects);
     }
     else if (dst_format == XRDP_nv12_709fr)
     {

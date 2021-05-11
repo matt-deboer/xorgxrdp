@@ -881,6 +881,10 @@ rdpClientConProcessMsgClientInfo(rdpPtr dev, rdpClientCon *clientCon)
             shmdt(clientCon->shmemptr);
         }
         bytes = clientCon->cap_width * clientCon->cap_height * 2;
+        if (clientCon->client_info.capture_format == XRDP_yuv444_709fr)
+        {
+            bytes = clientCon->cap_width * clientCon->cap_height * 4;
+        }
         clientCon->shmemid = shmget(IPC_PRIVATE, bytes, IPC_CREAT | 0777);
         clientCon->shmemptr = shmat(clientCon->shmemid, 0, 0);
         shmctl(clientCon->shmemid, IPC_RMID, NULL);
