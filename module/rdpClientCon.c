@@ -33,6 +33,7 @@ Client connection to xrdp
 #include <sys/types.h>
 #include <sys/ipc.h>
 #include <sys/shm.h>
+#include <limits.h>
 
 /* this should be before all X11 .h files */
 #include <xorg-server.h>
@@ -212,6 +213,7 @@ rdpClientConGotConnection(ScreenPtr pScreen, rdpPtr dev)
     LLOGLN(0, ("rdpClientConGotConnection:"));
     clientCon = g_new0(rdpClientCon, 1);
     clientCon->shmemstatus = SHM_UNINITIALIZED;
+    clientCon->updateRetries = 0;
     clientCon->dev = dev;
     dev->last_event_time_ms = GetTimeInMillis();
     dev->do_dirty_ons = 1;
@@ -1022,6 +1024,7 @@ rdpClientConProcessMsgClientInfo(rdpPtr dev, rdpClientCon *clientCon)
 
     if (clientCon->shmemstatus == SHM_UNINITIALIZED || clientCon->shmemstatus == SHM_RESIZING) {
         clientCon->shmemstatus = shmemstatus;
+        LLOGLN(0, ("rdpClientConProcessMsgClientInfo: shmemstatus %d", clientCon->shmemstatus));
     }
 
     return 0;
@@ -2069,7 +2072,7 @@ rdpClientConAddOsBitmap(rdpPtr dev, rdpClientCon *clientCon,
         return -1;
     }
 
-    oldest = 0x7fffffff;
+    oldest = INT_MAX;
     oldest_index = -1;
     rv = -1;
     index = 0;
@@ -2137,7 +2140,7 @@ rdpClientConAddOsBitmap(rdpPtr dev, rdpClientCon *clientCon,
                "clientCon->osBitmapNumUsed %d",
                clientCon->osBitmapNumUsed));
         /* find oldest */
-        oldest = 0x7fffffff;
+        oldest = INT_MAX;
         oldest_index = -1;
         index = 0;
         while (index < clientCon->maxOsBitmaps)
@@ -2426,9 +2429,9 @@ rdpCapRect(rdpClientCon *clientCon, BoxPtr cap_rect, struct image_data *id)
             if (scroll_offset != 0)
             {
                 rdpClientConScreenBlt(clientCon->dev, clientCon,
-                      scroll_rect.x1, scroll_rect.y1, 
+                      scroll_rect.x1, scroll_rect.y1,
                       scroll_rect.x2-scroll_rect.x1,
-                      scroll_rect.y2-scroll_rect.y1, 
+                      scroll_rect.y2-scroll_rect.y1,
                       scroll_rect.x1, scroll_rect.y1+scroll_offset);
             }
             rdpClientConSendPaintRectShmEx(clientCon->dev, clientCon, id,
@@ -2490,10 +2493,8 @@ rdpDeferredUpdateCallback(OsTimerPtr timer, CARD32 now, pointer arg)
         rdpScheduleDeferredUpdate(clientCon);
         return 0;
     }
-    else
-    {
-        LLOGLN(10, ("rdpDeferredUpdateCallback: sending"));
-    }
+    LLOGLN(10, ("rdpDeferredUpdateCallback: sending"));
+    clientCon->updateRetries = 0;
     rdpClientConGetScreenImageRect(clientCon->dev, clientCon, &id);
     LLOGLN(10, ("rdpDeferredUpdateCallback: rdp_width %d rdp_height %d "
            "rdp_Bpp %d screen width %d screen height %d",
@@ -2589,12 +2590,20 @@ rdpDeferredUpdateCallback(OsTimerPtr timer, CARD32 now, pointer arg)
 /******************************************************************************/
 #define MIN_MS_BETWEEN_FRAMES 40
 #define MIN_MS_TO_WAIT_FOR_MORE_UPDATES 4
+#define UPDATE_RETRY_TIMEOUT 200 // After this number of retries, give up and perform the capture anyway. This prevents an infinite loop.
 static void
 rdpScheduleDeferredUpdate(rdpClientCon *clientCon)
 {
     uint32_t curTime;
     uint32_t msToWait;
     uint32_t minNextUpdateTime;
+
+    if (clientCon->updateRetries > UPDATE_RETRY_TIMEOUT) {
+        LLOGLN(0, ("rdpScheduleDeferredUpdate: clientCon->updateRetries is %d"
+                    " and has exceeded the timeout of %d retries."
+                    " Overriding rect_id_ack to INT_MAX.", clientCon->updateRetries, UPDATE_RETRY_TIMEOUT));
+        clientCon->rect_id_ack = INT_MAX;
+    }
 
     curTime = (uint32_t) GetTimeInMillis();
     /* use two separate delays in order to limit the update rate and wait a bit
@@ -2615,6 +2624,7 @@ rdpScheduleDeferredUpdate(rdpClientCon *clientCon)
                                       rdpDeferredUpdateCallback,
                                       clientCon);
     clientCon->updateScheduled = TRUE;
+    ++clientCon->updateRetries;
 }
 
 /******************************************************************************/
