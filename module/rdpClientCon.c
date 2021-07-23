@@ -33,6 +33,8 @@ Client connection to xrdp
 #include <sys/types.h>
 #include <sys/ipc.h>
 #include <sys/shm.h>
+#include <sys/socket.h>
+#include <sys/wait.h>
 
 /* this should be before all X11 .h files */
 #include <xorg-server.h>
@@ -411,6 +413,16 @@ rdpClientConDisconnect(rdpPtr dev, rdpClientCon *clientCon)
     if (clientCon->shmemptr != NULL)
     {
         shmdt(clientCon->shmemptr);
+    }
+    if (clientCon->helper_pid > 0)
+    {
+        int exit_code;
+        if (waitpid(clientCon->helper_pid, &exit_code, WNOHANG) == 0)
+        {
+            /* still running */
+            kill(clientCon->helper_pid, SIGTERM);
+            waitpid(clientCon->helper_pid, &exit_code, 0);
+        }
     }
     free(clientCon);
     return 0;
@@ -821,6 +833,122 @@ rdpClientConProcessMsgClientInput(rdpPtr dev, rdpClientCon *clientCon)
 
 /******************************************************************************/
 static int
+rdpStartHelper(rdpPtr dev, rdpClientCon *clientCon)
+{
+    char text[64];
+    int spair[2];
+    int index;
+
+    socketpair(AF_UNIX, SOCK_STREAM, 0, spair);
+    clientCon->helper_pid = fork();
+    if (clientCon->helper_pid == -1)
+    {
+        /* error */
+        close(spair[0]);
+        close(spair[1]);
+    }
+    else if (clientCon->helper_pid == 0)
+    {
+        /* child */
+        for (index = 0; index < 256; index++)
+        {
+            if ((index != clientCon->sck) && (index != spair[0]))
+            {
+                close(index);
+            }
+        }
+        open("/dev/null", O_RDWR);
+        //open("/dev/null", O_RDWR);
+        //open("/dev/null", O_RDWR);
+        snprintf(text, 63, "%s/.xorgxrdp_helper-%s-stdout.log", getenv("HOME"), display);
+        text[63] = 0;
+        open(text, O_RDWR | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
+        snprintf(text, 63, "%s/.xorgxrdp_helper-%s-stderr.log", getenv("HOME"), display);
+        text[63] = 0;
+        open(text, O_RDWR | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
+        snprintf(text, 63, ":%s", display);
+        text[63] = 0;
+        setenv("DISPLAY", text, 1);
+        snprintf(text, 63, "%d", spair[0]);
+        text[63] = 0;
+        setenv("XORGXRDP_XORG_FD", text, 1);
+        snprintf(text, 63, "%d", clientCon->sck);
+        text[63] = 0;
+        setenv("XORGXRDP_XRDP_FD", text, 1);
+        execlp("/usr/local/bin/xorgxrdp_helper", "/usr/local/bin/xorgxrdp_helper", "-d", (void *) 0);
+        LLOGLN(0, ("rdpClientConProcessMsgClientInfo: failed to execute helper"));
+        exit(0);
+    }
+    else
+    {
+        /* parent */
+        LLOGLN(0, ("rdpClientConProcessMsgClientInfo: started helper pid %d", clientCon->helper_pid));
+        rdpClientConRemoveEnabledDevice(clientCon->sck);
+        close(clientCon->sck);
+        close(spair[0]);
+        clientCon->sck = spair[1];
+        rdpClientConAddEnabledDevice(dev->pScreen, clientCon->sck);
+    }
+    return 0;
+}
+
+/******************************************************************************/
+static int
+rdpSendHelperMonitors(rdpPtr dev, rdpClientCon *clientCon)
+{
+    int index;
+    int len;
+    int rv;
+    int width;
+    int height;
+
+    rdpClientConSendPending(dev, clientCon);
+    init_stream(clientCon->out_s, 0);
+    s_push_layer(clientCon->out_s, iso_hdr, 8);
+    out_uint16_le(clientCon->out_s, 1); /* clear monitors */
+    out_uint16_le(clientCon->out_s, 4); /* size */
+    clientCon->count++;
+    if (dev->monitorCount < 1)
+    {
+        width = RDPALIGN(dev->width, 16);
+        height = RDPALIGN(dev->height, 16);
+        out_uint16_le(clientCon->out_s, 2);
+        out_uint16_le(clientCon->out_s, 20); /* size */
+        out_uint16_le(clientCon->out_s, width);
+        out_uint16_le(clientCon->out_s, height);
+        out_uint32_le(clientCon->out_s, 0xDEADBEEF);
+        out_uint32_le(clientCon->out_s, clientCon->conNumber);
+        out_uint32_le(clientCon->out_s, 0);
+        clientCon->count++;
+    }
+    else
+    {
+        for (index = 0; index < dev->monitorCount; index++)
+        {
+            width = RDPALIGN(dev->minfo[index].right - dev->minfo[index].left, 16);
+            height = RDPALIGN(dev->minfo[index].bottom - dev->minfo[index].top, 16);
+            out_uint16_le(clientCon->out_s, 2);
+            out_uint16_le(clientCon->out_s, 20); /* size */
+            out_uint16_le(clientCon->out_s, width);
+            out_uint16_le(clientCon->out_s, height);
+            out_uint32_le(clientCon->out_s, 0xDEADBEEF);
+            out_uint32_le(clientCon->out_s, clientCon->conNumber);
+            out_uint32_le(clientCon->out_s, index);
+            clientCon->count++;
+        }
+    }
+    s_mark_end(clientCon->out_s);
+    len = (int) (clientCon->out_s->end - clientCon->out_s->data);
+    s_pop_layer(clientCon->out_s, iso_hdr);
+    out_uint16_le(clientCon->out_s, 100);
+    out_uint16_le(clientCon->out_s, clientCon->count);
+    out_uint32_le(clientCon->out_s, len - 8);
+    rv = rdpClientConSend(dev, clientCon, clientCon->out_s->data, len);
+    return rv;
+}
+
+/******************************************************************************/
+static int
 rdpClientConProcessMsgClientInfo(rdpPtr dev, rdpClientCon *clientCon)
 {
     struct stream *s;
@@ -1010,6 +1138,12 @@ rdpClientConProcessMsgClientInfo(rdpPtr dev, rdpClientCon *clientCon)
     /* rdpLoadLayout */
     rdpInputKeyboardEvent(dev, 18, (long)(&(clientCon->client_info)),
                           0, 0, 0);
+
+    if (dev->glamor || dev->nvidia)
+    {
+        rdpStartHelper(dev, clientCon);
+        rdpSendHelperMonitors(dev, clientCon);
+    }
 
     return 0;
 }

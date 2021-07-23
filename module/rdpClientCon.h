@@ -104,6 +104,8 @@ struct _rdpClientCon
     int rect_id;
     int rect_id_ack;
 
+    PixmapPtr helperPixmaps[16];
+
     OsTimerPtr updateTimer;
     CARD32 lastUpdateTime; /* millisecond timestamp */
     int updateScheduled; /* boolean */
@@ -115,6 +117,8 @@ struct _rdpClientCon
 
     /* true = skip drawing */
     int suppress_output;
+
+    int helper_pid;
 
     struct _rdpClientCon *next;
     struct _rdpClientCon *prev;

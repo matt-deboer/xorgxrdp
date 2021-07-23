@@ -1195,6 +1195,8 @@ rdpCapture3(rdpClientCon *clientCon, RegionPtr in_reg, BoxPtr *out_rects,
     *out_rects = lout_rects;
     *num_out_rects = num_rects;
 
+    return rv;
+
     src = id->pixels;
     dst = id->shmem_pixels;
     dst_format = clientCon->rdp_format;
@@ -1308,10 +1310,11 @@ copy_vmem(rdpPtr dev, RegionPtr in_reg)
 
 /******************************************************************************/
 static int
-copy_vmem_nvidia(rdpPtr dev, RegionPtr in_reg)
+copy_vmem_nvidia(rdpClientCon *clientCon, RegionPtr in_reg)
 {
     PixmapPtr hwPixmap;
     PixmapPtr swPixmap;
+    PixmapPtr helperPixmap;
     BoxPtr pbox;
     ScreenPtr pScreen;
     GCPtr copyGC;
@@ -1323,9 +1326,12 @@ copy_vmem_nvidia(rdpPtr dev, RegionPtr in_reg)
     int width;
     int height;
     char pix1[16];
+    rdpPtr dev;
 
     /* copy the dirty area from the screen hw pixmap to a sw pixmap
        this should do a dma */
+    dev = clientCon->dev;
+    helperPixmap = clientCon->helperPixmaps[0];
     pScreen = dev->pScreen;
     hwPixmap = pScreen->GetScreenPixmap(pScreen);
     swPixmap = dev->screenSwPixmap;
@@ -1345,10 +1351,17 @@ copy_vmem_nvidia(rdpPtr dev, RegionPtr in_reg)
             height = pbox[index].y2 - pbox[index].y1;
             if ((width > 0) && (height > 0))
             {
-                copyGC->ops->CopyArea(&(hwPixmap->drawable),
-                                      &(swPixmap->drawable),
-                                      copyGC, left, top,
-                                      width, height, left, top);
+                //copyGC->ops->CopyArea(&(hwPixmap->drawable),
+                //                      &(swPixmap->drawable),
+                //                      copyGC, left, top,
+                //                      width, height, left, top);
+                if (helperPixmap != NULL)
+                {
+                    copyGC->ops->CopyArea(&(hwPixmap->drawable),
+                                          &(helperPixmap->drawable),
+                                          copyGC, left, top,
+                                          width, height, left, top);
+                }
             }
         }
         FreeScratchGC(copyGC);
@@ -1357,8 +1370,13 @@ copy_vmem_nvidia(rdpPtr dev, RegionPtr in_reg)
     {
         return 1;
     }
-    pScreen->GetImage(&(swPixmap->drawable), 0, 0, 1, 1, ZPixmap,
-                      0xffffffff, pix1);
+    //pScreen->GetImage(&(swPixmap->drawable), 0, 0, 1, 1, ZPixmap,
+    //                  0xffffffff, pix1);
+    //if (helperPixmap != NULL)
+    //{
+    //    pScreen->GetImage(&(helperPixmap->drawable), 0, 0, 1, 1, ZPixmap,
+    //                      0xffffffff, pix1);
+    //}
     return 0;
 }
 
@@ -1386,7 +1404,7 @@ rdpCapture(rdpClientCon *clientCon, RegionPtr in_reg, BoxPtr *out_rects,
     }
     if (clientCon->dev->nvidia)
     {
-        copy_vmem_nvidia(clientCon->dev, in_reg);
+        copy_vmem_nvidia(clientCon, in_reg);
     }
     switch (mode)
     {
