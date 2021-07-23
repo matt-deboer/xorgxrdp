@@ -872,8 +872,8 @@ rdpClientConProcessMsgClientInfo(rdpPtr dev, rdpClientCon *clientCon)
     else if (clientCon->client_info.capture_code == 3) /* H264 */
     {
         LLOGLN(0, ("rdpClientConProcessMsgClientInfo: got H264 capture"));
-        clientCon->cap_width = clientCon->rdp_width;
-        clientCon->cap_height = clientCon->rdp_height;
+        clientCon->cap_width = RDPALIGN(clientCon->rdp_width, 16);
+        clientCon->cap_height = RDPALIGN(clientCon->rdp_height, 16);
         LLOGLN(0, ("  cap_width %d cap_height %d",
                clientCon->cap_width, clientCon->cap_height));
         if (clientCon->shmemptr != 0)
@@ -881,6 +881,10 @@ rdpClientConProcessMsgClientInfo(rdpPtr dev, rdpClientCon *clientCon)
             shmdt(clientCon->shmemptr);
         }
         bytes = clientCon->cap_width * clientCon->cap_height * 2;
+        if (clientCon->client_info.capture_format == XRDP_yuv444_709fr)
+        {
+            bytes = clientCon->cap_width * clientCon->cap_height * 4;
+        }
         clientCon->shmemid = shmget(IPC_PRIVATE, bytes, IPC_CREAT | 0777);
         clientCon->shmemptr = shmat(clientCon->shmemid, 0, 0);
         shmctl(clientCon->shmemid, IPC_RMID, NULL);
