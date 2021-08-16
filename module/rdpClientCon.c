@@ -858,14 +858,8 @@ rdpStartHelper(rdpPtr dev, rdpClientCon *clientCon)
             }
         }
         open("/dev/null", O_RDWR);
-        //open("/dev/null", O_RDWR);
-        //open("/dev/null", O_RDWR);
-        snprintf(text, 63, "%s/.xorgxrdp_helper-%s-stdout.log", getenv("HOME"), display);
-        text[63] = 0;
-        open(text, O_RDWR | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
-        snprintf(text, 63, "%s/.xorgxrdp_helper-%s-stderr.log", getenv("HOME"), display);
-        text[63] = 0;
-        open(text, O_RDWR | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
+        open("/dev/null", O_RDWR);
+        open("/dev/null", O_RDWR);
         snprintf(text, 63, ":%s", display);
         text[63] = 0;
         setenv("DISPLAY", text, 1);
@@ -875,14 +869,14 @@ rdpStartHelper(rdpPtr dev, rdpClientCon *clientCon)
         snprintf(text, 63, "%d", clientCon->sck);
         text[63] = 0;
         setenv("XORGXRDP_XRDP_FD", text, 1);
-        execlp("/usr/local/bin/xorgxrdp_helper", "/usr/local/bin/xorgxrdp_helper", "-d", (void *) 0);
-        LLOGLN(0, ("rdpClientConProcessMsgClientInfo: failed to execute helper"));
+        execlp("xorgxrdp_helper", "xorgxrdp_helper", "-d", (void *) 0);
         exit(0);
     }
     else
     {
         /* parent */
-        LLOGLN(0, ("rdpClientConProcessMsgClientInfo: started helper pid %d", clientCon->helper_pid));
+        LLOGLN(0, ("rdpClientConProcessMsgClientInfo: started helper pid %d",
+               clientCon->helper_pid));
         rdpClientConRemoveEnabledDevice(clientCon->sck);
         close(clientCon->sck);
         close(spair[0]);
