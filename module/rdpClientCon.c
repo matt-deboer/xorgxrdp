@@ -2672,7 +2672,7 @@ rdpDeferredUpdateCallback(OsTimerPtr timer, CARD32 now, pointer arg)
 
 /******************************************************************************/
 #define MIN_MS_BETWEEN_FRAMES 40
-#define MIN_MS_TO_WAIT_FOR_MORE_UPDATES 4
+#define MIN_MS_TO_WAIT_FOR_MORE_UPDATES 0
 static void
 rdpScheduleDeferredUpdate(rdpClientCon *clientCon)
 {
@@ -2693,12 +2693,17 @@ rdpScheduleDeferredUpdate(rdpClientCon *clientCon)
     {
         msToWait = minNextUpdateTime - curTime;
     }
-
+    if (msToWait < 1)
+    {
+        LLOGLN(10, ("rdpScheduleDeferredUpdate: now"));
+        rdpDeferredUpdateCallback(clientCon->updateTimer, curTime, clientCon);
+        return;
+    }
+    clientCon->updateScheduled = TRUE;
     clientCon->updateTimer = TimerSet(clientCon->updateTimer, 0,
                                       (CARD32) msToWait,
                                       rdpDeferredUpdateCallback,
                                       clientCon);
-    clientCon->updateScheduled = TRUE;
 }
 
 /******************************************************************************/
