@@ -1238,47 +1238,49 @@ rdpCapture3(rdpClientCon *clientCon, RegionPtr in_reg, BoxPtr *out_rects,
     *out_rects = lout_rects;
     *num_out_rects = num_rects;
 
-    src = id->pixels;
-    dst = id->shmem_pixels;
-    dst_format = clientCon->rdp_format;
-    src_stride = id->lineBytes;
-    dst_stride = clientCon->cap_stride_bytes;
-
-    if (dst_format == XRDP_a8r8g8b8)
-    {
-        rdpCopyBox_a8r8g8b8_to_a8r8g8b8(clientCon,
-                                        src, src_stride, 0, 0,
-                                        dst, dst_stride, 0, 0,
-                                        *out_rects, num_rects);
-    }
-    else if (dst_format == XRDP_nv12_709fr)
-    {
-        dst_uv = dst;
-        dst_uv += clientCon->cap_width * clientCon->cap_height;
-        rdpCopyBox_a8r8g8b8_to_nv12_709fr(clientCon,
-                                          src, src_stride, 0, 0,
-                                          dst, dst_stride,
-                                          dst_uv, dst_stride,
-                                          0, 0,
-                                          *out_rects, num_rects);
-    }
-    else if (dst_format == XRDP_nv12)
-    {
-        dst_uv = dst;
-        dst_uv += clientCon->cap_width * clientCon->cap_height;
-        rdpCopyBox_a8r8g8b8_to_nv12(clientCon,
-                                    src, src_stride, 0, 0,
-                                    dst, dst_stride,
-                                    dst_uv, dst_stride,
-                                    0, 0,
-                                    *out_rects, num_rects);
-    }
-    else
-    {
-        LLOGLN(0, ("rdpCapture3: unimplemented color conversion"));
-    }
-
     return rv;
+
+    // src = id->pixels;
+    // dst = id->shmem_pixels;
+    // dst_format = clientCon->rdp_format;
+    // src_stride = id->lineBytes;
+    // dst_stride = clientCon->cap_stride_bytes;
+
+    // if (dst_format == XRDP_a8r8g8b8)
+    // {
+    //     rdpCopyBox_a8r8g8b8_to_a8r8g8b8(clientCon,
+    //                                     src, src_stride, 0, 0,
+    //                                     dst, dst_stride, 0, 0,
+    //                                     *out_rects, num_rects);
+    // }
+    // else if (dst_format == XRDP_nv12_709fr)
+    // {
+    //     dst_uv = dst;
+    //     dst_uv += clientCon->cap_width * clientCon->cap_height;
+    //     rdpCopyBox_a8r8g8b8_to_nv12_709fr(clientCon,
+    //                                       src, src_stride, 0, 0,
+    //                                       dst, dst_stride,
+    //                                       dst_uv, dst_stride,
+    //                                       0, 0,
+    //                                       *out_rects, num_rects);
+    // }
+    // else if (dst_format == XRDP_nv12)
+    // {
+    //     dst_uv = dst;
+    //     dst_uv += clientCon->cap_width * clientCon->cap_height;
+    //     rdpCopyBox_a8r8g8b8_to_nv12(clientCon,
+    //                                 src, src_stride, 0, 0,
+    //                                 dst, dst_stride,
+    //                                 dst_uv, dst_stride,
+    //                                 0, 0,
+    //                                 *out_rects, num_rects);
+    // }
+    // else
+    // {
+    //     LLOGLN(0, ("rdpCapture3: unimplemented color conversion"));
+    // }
+
+    // return rv;
 }
 
 #if defined(XORGXRDP_GLAMOR)
@@ -1343,10 +1345,11 @@ copy_vmem(rdpPtr dev, RegionPtr in_reg)
 
 /******************************************************************************/
 static int
-copy_vmem_nvidia(rdpPtr dev, RegionPtr in_reg)
+copy_vmem_nvidia(rdpClientCon *clientCon, RegionPtr in_reg)
 {
     PixmapPtr hwPixmap;
     PixmapPtr swPixmap;
+    PixmapPtr helperPixmap;
     BoxPtr pbox;
     ScreenPtr pScreen;
     GCPtr copyGC;
@@ -1358,9 +1361,12 @@ copy_vmem_nvidia(rdpPtr dev, RegionPtr in_reg)
     int width;
     int height;
     char pix1[16];
+    rdpPtr dev;
 
     /* copy the dirty area from the screen hw pixmap to a sw pixmap
        this should do a dma */
+    dev = clientCon->dev;
+    helperPixmap = clientCon->helperPixmaps[0];
     pScreen = dev->pScreen;
     hwPixmap = pScreen->GetScreenPixmap(pScreen);
     swPixmap = dev->screenSwPixmap;
@@ -1384,6 +1390,17 @@ copy_vmem_nvidia(rdpPtr dev, RegionPtr in_reg)
                                       &(swPixmap->drawable),
                                       copyGC, left, top,
                                       width, height, left, top);
+                //copyGC->ops->CopyArea(&(hwPixmap->drawable),
+                //                      &(swPixmap->drawable),
+                //                      copyGC, left, top,
+                //                      width, height, left, top);
+                if (helperPixmap != NULL)
+                {
+                    copyGC->ops->CopyArea(&(hwPixmap->drawable),
+                                          &(helperPixmap->drawable),
+                                          copyGC, left, top,
+                                          width, height, left, top);
+                }
             }
         }
         FreeScratchGC(copyGC);
@@ -1394,6 +1411,13 @@ copy_vmem_nvidia(rdpPtr dev, RegionPtr in_reg)
     }
     pScreen->GetImage(&(swPixmap->drawable), 0, 0, 1, 1, ZPixmap,
                       0xffffffff, pix1);
+    //pScreen->GetImage(&(swPixmap->drawable), 0, 0, 1, 1, ZPixmap,
+    //                  0xffffffff, pix1);
+    //if (helperPixmap != NULL)
+    //{
+    //    pScreen->GetImage(&(helperPixmap->drawable), 0, 0, 1, 1, ZPixmap,
+    //                      0xffffffff, pix1);
+    //}
     return 0;
 }
 
@@ -1422,7 +1446,7 @@ rdpCapture(rdpClientCon *clientCon, RegionPtr in_reg, BoxPtr *out_rects,
     }
     if (clientCon->dev->nvidia)
     {
-        copy_vmem_nvidia(clientCon->dev, in_reg);
+        copy_vmem_nvidia(clientCon, in_reg);
     }
     switch (mode)
     {

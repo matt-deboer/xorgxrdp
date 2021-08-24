@@ -71,6 +71,26 @@ rdpPutImage(DrawablePtr pDst, GCPtr pGC, int depth, int x, int y,
 
     LLOGLN(10, ("rdpPutImage:"));
     dev = rdpGetDevFromScreen(pGC->pScreen);
+    if ((x == 0) && (y == 0) && (w == 4) && (h == 4) && (depth == 24))
+    {
+        int *pBits32 = (int *) pBits;
+        if (pBits32[0] == 0xDEADBEEF)
+        {
+            rdpClientCon *clientCon = dev->clientConHead;
+            while (clientCon != NULL)
+            {
+                if (clientCon->conNumber == pBits32[1])
+                {
+                    LLOGLN(0, ("rdpPutImage: setting conNumber %d, monitor num %d "
+                           "to pixmap %p", pBits32[1], pBits32[2], pDst));
+                    clientCon->helperPixmaps[pBits32[2] & 0xF] = (PixmapPtr) pDst;
+                    break;
+                }
+                clientCon = clientCon->next;
+            }
+            return;
+        }
+    }
     dev->counts.rdpPutImageCallCount++;
     box.x1 = x + pDst->x;
     box.y1 = y + pDst->y;

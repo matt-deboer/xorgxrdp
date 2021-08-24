@@ -33,7 +33,8 @@ Client connection to xrdp
 #include <sys/types.h>
 #include <sys/ipc.h>
 #include <sys/shm.h>
-#include <limits.h>
+#include <sys/socket.h>
+#include <sys/wait.h>
 
 /* this should be before all X11 .h files */
 #include <xorg-server.h>
@@ -105,7 +106,7 @@ rdpClientConDisconnect(rdpPtr dev, rdpClientCon *clientCon);
 static CARD32
 rdpDeferredIdleDisconnectCallback(OsTimerPtr timer, CARD32 now, pointer arg);
 static void
-rdpScheduleDeferredUpdate(rdpClientCon *clientCon);
+rdpScheduleDeferredUpdate(rdpClientCon *clientCon, int retrying);
 
 #if XORG_VERSION_CURRENT < XORG_VERSION_NUMERIC(1, 18, 5, 0, 0)
 
@@ -213,7 +214,7 @@ rdpClientConGotConnection(ScreenPtr pScreen, rdpPtr dev)
     LLOGLN(0, ("rdpClientConGotConnection:"));
     clientCon = g_new0(rdpClientCon, 1);
     clientCon->shmemstatus = SHM_UNINITIALIZED;
-    clientCon->updateRetries = 0;
+    clientCon->retries = 0;
     clientCon->dev = dev;
     dev->last_event_time_ms = GetTimeInMillis();
     dev->do_dirty_ons = 1;
@@ -354,6 +355,26 @@ rdpDeferredIdleDisconnectCallback(OsTimerPtr timer, CARD32 now, pointer arg)
                                         rdpDeferredIdleDisconnectCallback, dev);
     return 0;
 }
+
+/*****************************************************************************/
+static int
+rdpShutdownHelper(rdpPtr dev, rdpClientCon *clientCon) {
+    LLOGLN(0, ("rdpShutdownHelper:"));
+    if (clientCon->helper_pid <= 0)
+    {
+        return 0;
+    }
+    int exit_code;
+    if (waitpid(clientCon->helper_pid, &exit_code, WNOHANG) == 0)
+    {
+        /* still running */
+        kill(clientCon->helper_pid, SIGTERM);
+        waitpid(clientCon->helper_pid, &exit_code, 0);
+    }
+    clientCon->helper_pid = -1;
+    return exit_code;
+}
+
 /*****************************************************************************/
 static int
 rdpClientConDisconnect(rdpPtr dev, rdpClientCon *clientCon)
@@ -415,6 +436,7 @@ rdpClientConDisconnect(rdpPtr dev, rdpClientCon *clientCon)
     {
         shmdt(clientCon->shmemptr);
     }
+    rdpShutdownHelper(dev, clientCon);
     free(clientCon);
     return 0;
 }
@@ -825,6 +847,126 @@ rdpClientConProcessMsgClientInput(rdpPtr dev, rdpClientCon *clientCon)
 
 /******************************************************************************/
 static int
+rdpStartHelper(rdpPtr dev, rdpClientCon *clientCon)
+{
+    char text[64];
+    int spair[2];
+    int index;
+
+    // The helper is already running, don't attempt to initialize it again.
+    if (clientCon->helper_pid != 0) {
+        return 0;
+    }
+
+    socketpair(AF_UNIX, SOCK_STREAM, 0, spair);
+
+    clientCon->helper_pid = fork();
+    if (clientCon->helper_pid == -1)
+    {
+        /* error */
+        close(spair[0]);
+        close(spair[1]);
+    }
+    else if (clientCon->helper_pid == 0)
+    {
+        /* child */
+        for (index = 0; index < 256; index++)
+        {
+            if ((index != clientCon->sck) && (index != spair[0]))
+            {
+                close(index);
+            }
+        }
+        open("/dev/null", O_RDWR);
+        snprintf(text, 63, "%s/.xorgxrdp_helper-%s-stdout.log", getenv("HOME"), display);
+        text[63] = 0;
+        open(text, O_RDWR | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
+        snprintf(text, 63, "%s/.xorgxrdp_helper-%s-stderr.log", getenv("HOME"), display);
+        text[63] = 0;
+        open(text, O_RDWR | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
+        snprintf(text, 63, ":%s", display);
+        text[63] = 0;
+        setenv("DISPLAY", text, 1);
+        snprintf(text, 63, "%d", spair[0]);
+        text[63] = 0;
+        setenv("XORGXRDP_XORG_FD", text, 1);
+        snprintf(text, 63, "%d", clientCon->sck);
+        text[63] = 0;
+        setenv("XORGXRDP_XRDP_FD", text, 1);
+        execlp("/usr/local/bin/xorgxrdp_helper", "/usr/local/bin/xorgxrdp_helper", "-d", (void *) 0);
+        LLOGLN(0, ("rdpClientConProcessMsgClientInfo: failed to execute helper"));
+        exit(0);
+    }
+    else
+    {
+        /* parent */
+        LLOGLN(0, ("rdpClientConProcessMsgClientInfo: started helper pid %d", clientCon->helper_pid));
+        rdpClientConRemoveEnabledDevice(clientCon->sck);
+        close(clientCon->sck);
+        close(spair[0]);
+        clientCon->sck = spair[1];
+        rdpClientConAddEnabledDevice(dev->pScreen, clientCon->sck);
+    }
+    return 0;
+}
+
+/******************************************************************************/
+static int
+rdpSendHelperMonitors(rdpPtr dev, rdpClientCon *clientCon)
+{
+    int index;
+    int len;
+    int rv;
+    int width;
+    int height;
+
+    rdpClientConSendPending(dev, clientCon);
+    init_stream(clientCon->out_s, 0);
+    s_push_layer(clientCon->out_s, iso_hdr, 8);
+    out_uint16_le(clientCon->out_s, 1); /* clear monitors */
+    out_uint16_le(clientCon->out_s, 4); /* size */
+    clientCon->count++;
+    if (dev->monitorCount < 1)
+    {
+        width = RDPALIGN(dev->width, 16);
+        height = RDPALIGN(dev->height, 16);
+        out_uint16_le(clientCon->out_s, 2);
+        out_uint16_le(clientCon->out_s, 20); /* size */
+        out_uint16_le(clientCon->out_s, width);
+        out_uint16_le(clientCon->out_s, height);
+        out_uint32_le(clientCon->out_s, 0xDEADBEEF);
+        out_uint32_le(clientCon->out_s, clientCon->conNumber);
+        out_uint32_le(clientCon->out_s, 0);
+        clientCon->count++;
+    }
+    else
+    {
+        for (index = 0; index < dev->monitorCount; index++)
+        {
+            width = RDPALIGN(dev->minfo[index].right - dev->minfo[index].left, 16);
+            height = RDPALIGN(dev->minfo[index].bottom - dev->minfo[index].top, 16);
+            out_uint16_le(clientCon->out_s, 2);
+            out_uint16_le(clientCon->out_s, 20); /* size */
+            out_uint16_le(clientCon->out_s, width);
+            out_uint16_le(clientCon->out_s, height);
+            out_uint32_le(clientCon->out_s, 0xDEADBEEF);
+            out_uint32_le(clientCon->out_s, clientCon->conNumber);
+            out_uint32_le(clientCon->out_s, index);
+            clientCon->count++;
+        }
+    }
+    s_mark_end(clientCon->out_s);
+    len = (int) (clientCon->out_s->end - clientCon->out_s->data);
+    s_pop_layer(clientCon->out_s, iso_hdr);
+    out_uint16_le(clientCon->out_s, 100);
+    out_uint16_le(clientCon->out_s, clientCon->count);
+    out_uint32_le(clientCon->out_s, len - 8);
+    rv = rdpClientConSend(dev, clientCon, clientCon->out_s->data, len);
+    return rv;
+}
+
+/******************************************************************************/
+static int
 rdpClientConProcessMsgClientInfo(rdpPtr dev, rdpClientCon *clientCon)
 {
     struct stream *s;
@@ -1024,7 +1166,12 @@ rdpClientConProcessMsgClientInfo(rdpPtr dev, rdpClientCon *clientCon)
 
     if (clientCon->shmemstatus == SHM_UNINITIALIZED || clientCon->shmemstatus == SHM_RESIZING) {
         clientCon->shmemstatus = shmemstatus;
-        LLOGLN(0, ("rdpClientConProcessMsgClientInfo: shmemstatus %d", clientCon->shmemstatus));
+    }
+
+    if (dev->glamor || dev->nvidia)
+    {
+        rdpStartHelper(dev, clientCon);
+        rdpSendHelperMonitors(dev, clientCon);
     }
 
     return 0;
@@ -2072,7 +2219,7 @@ rdpClientConAddOsBitmap(rdpPtr dev, rdpClientCon *clientCon,
         return -1;
     }
 
-    oldest = INT_MAX;
+    oldest = 0x7fffffff;
     oldest_index = -1;
     rv = -1;
     index = 0;
@@ -2140,7 +2287,7 @@ rdpClientConAddOsBitmap(rdpPtr dev, rdpClientCon *clientCon,
                "clientCon->osBitmapNumUsed %d",
                clientCon->osBitmapNumUsed));
         /* find oldest */
-        oldest = INT_MAX;
+        oldest = 0x7fffffff;
         oldest_index = -1;
         index = 0;
         while (index < clientCon->maxOsBitmaps)
@@ -2429,9 +2576,9 @@ rdpCapRect(rdpClientCon *clientCon, BoxPtr cap_rect, struct image_data *id)
             if (scroll_offset != 0)
             {
                 rdpClientConScreenBlt(clientCon->dev, clientCon,
-                      scroll_rect.x1, scroll_rect.y1,
+                      scroll_rect.x1, scroll_rect.y1, 
                       scroll_rect.x2-scroll_rect.x1,
-                      scroll_rect.y2-scroll_rect.y1,
+                      scroll_rect.y2-scroll_rect.y1, 
                       scroll_rect.x1, scroll_rect.y1+scroll_offset);
             }
             rdpClientConSendPaintRectShmEx(clientCon->dev, clientCon, id,
@@ -2487,14 +2634,14 @@ rdpDeferredUpdateCallback(OsTimerPtr timer, CARD32 now, pointer arg)
         /* do not allow captures until we have the client_info */
         clientCon->client_info.size == 0)
     {
-        LLOGLN(10, ("rdpDeferredUpdateCallback: reschedule rect_id %d "
-               "rect_id_ack %d",
-               clientCon->rect_id, clientCon->rect_id_ack));
-        rdpScheduleDeferredUpdate(clientCon);
+        LLOGLN(0, ("rdpDeferredUpdateCallback: reschedule rect_id %d "
+               "rect_id_ack %d, retries: %d",
+               clientCon->rect_id, clientCon->rect_id_ack, clientCon->retries));
+        rdpScheduleDeferredUpdate(clientCon, 1);
         return 0;
     }
     LLOGLN(10, ("rdpDeferredUpdateCallback: sending"));
-    clientCon->updateRetries = 0;
+    clientCon->retries = 0;
     rdpClientConGetScreenImageRect(clientCon->dev, clientCon, &id);
     LLOGLN(10, ("rdpDeferredUpdateCallback: rdp_width %d rdp_height %d "
            "rdp_Bpp %d screen width %d screen height %d",
@@ -2512,7 +2659,7 @@ rdpDeferredUpdateCallback(OsTimerPtr timer, CARD32 now, pointer arg)
                dirty_extents.x2, dirty_extents.y2));
         de_width = dirty_extents.x2 - dirty_extents.x1;
         de_height = dirty_extents.y2 - dirty_extents.y1;
-        if ((de_width > 0) && (de_height > 0))
+        if (de_width > 0 && de_height > 0)
         {
             band_height = MAX_CAPTURE_PIXELS / de_width;
             band_index = 0;
@@ -2581,7 +2728,7 @@ rdpDeferredUpdateCallback(OsTimerPtr timer, CARD32 now, pointer arg)
     }
     if (rdpRegionNotEmpty(clientCon->dirtyRegion))
     {
-        rdpScheduleDeferredUpdate(clientCon);
+        rdpScheduleDeferredUpdate(clientCon, 0);
     }
     return 0;
 }
@@ -2589,42 +2736,46 @@ rdpDeferredUpdateCallback(OsTimerPtr timer, CARD32 now, pointer arg)
 
 /******************************************************************************/
 #define MIN_MS_BETWEEN_FRAMES 40
-#define MIN_MS_TO_WAIT_FOR_MORE_UPDATES 4
-#define UPDATE_RETRY_TIMEOUT 200 // After this number of retries, give up and perform the capture anyway. This prevents an infinite loop.
+#define MIN_MS_TO_WAIT_FOR_MORE_UPDATES 0
+#define MS_TO_WAIT_FOR_RETRY_UPDATE 4
 static void
-rdpScheduleDeferredUpdate(rdpClientCon *clientCon)
+rdpScheduleDeferredUpdate(rdpClientCon *clientCon, int retrying)
 {
     uint32_t curTime;
     uint32_t msToWait;
     uint32_t minNextUpdateTime;
 
-    if (clientCon->updateRetries > UPDATE_RETRY_TIMEOUT) {
-        LLOGLN(0, ("rdpScheduleDeferredUpdate: clientCon->updateRetries is %d"
-                    " and has exceeded the timeout of %d retries."
-                    " Overriding rect_id_ack to INT_MAX.", clientCon->updateRetries, UPDATE_RETRY_TIMEOUT));
-        clientCon->rect_id_ack = INT_MAX;
+    if (clientCon->retries > 100) {
+        LLOGLN(0, ("rdpScheduleDeferredUpdate: clientCon->retries is %d and has exceeded timeout. Overriding rect_id_ack.", clientCon->retries));
+        clientCon->rect_id_ack = 0x7FFFFFFF;
     }
 
     curTime = (uint32_t) GetTimeInMillis();
     /* use two separate delays in order to limit the update rate and wait a bit
        for more changes before sending an update. Always waiting the longer
        delay would introduce unnecessarily much latency. */
-    msToWait = MIN_MS_TO_WAIT_FOR_MORE_UPDATES;
+    msToWait = retrying == 1 ? MS_TO_WAIT_FOR_RETRY_UPDATE : MIN_MS_TO_WAIT_FOR_MORE_UPDATES;
     minNextUpdateTime = clientCon->lastUpdateTime + MIN_MS_BETWEEN_FRAMES;
     /* the first check is to gracefully handle the infrequent case of
        the time wrapping around */
-    if(clientCon->lastUpdateTime < curTime &&
+    if (clientCon->lastUpdateTime < curTime &&
         minNextUpdateTime > curTime + msToWait)
     {
         msToWait = minNextUpdateTime - curTime;
     }
 
+    ++clientCon->retries;
+    if (msToWait < 1)
+    {
+        LLOGLN(10, ("rdpScheduleDeferredUpdate: now"));
+        rdpDeferredUpdateCallback(clientCon->updateTimer, curTime, clientCon);
+        return;
+    }
+    clientCon->updateScheduled = TRUE;
     clientCon->updateTimer = TimerSet(clientCon->updateTimer, 0,
                                       (CARD32) msToWait,
                                       rdpDeferredUpdateCallback,
                                       clientCon);
-    clientCon->updateScheduled = TRUE;
-    ++clientCon->updateRetries;
 }
 
 /******************************************************************************/
@@ -2636,7 +2787,7 @@ rdpClientConAddDirtyScreenReg(rdpPtr dev, rdpClientCon *clientCon,
     rdpRegionUnion(clientCon->dirtyRegion, clientCon->dirtyRegion, reg);
     if (clientCon->updateScheduled == FALSE)
     {
-        rdpScheduleDeferredUpdate(clientCon);
+        rdpScheduleDeferredUpdate(clientCon, 0);
     }
     return 0;
 }

@@ -113,10 +113,12 @@ struct _rdpClientCon
     int rect_id_ack;
     enum shared_memory_status shmemstatus;
 
+    PixmapPtr helperPixmaps[16];
+
     OsTimerPtr updateTimer;
     CARD32 lastUpdateTime; /* millisecond timestamp */
     int updateScheduled; /* boolean */
-    int updateRetries;
+    int retries;
 
     RegionPtr dirtyRegion;
 
@@ -126,6 +128,8 @@ struct _rdpClientCon
 
     /* true = skip drawing */
     int suppress_output;
+
+    int helper_pid;
 
     struct _rdpClientCon *next;
     struct _rdpClientCon *prev;
