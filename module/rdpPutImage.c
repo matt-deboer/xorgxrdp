@@ -68,22 +68,38 @@ rdpPutImage(DrawablePtr pDst, GCPtr pGC, int depth, int x, int y,
     RegionRec reg;
     int cd;
     BoxRec box;
+    PixmapPtr pixmap;
+    int *pBits32;
+    rdpClientCon *clientCon;
+    ScreenPtr pScreen;
 
     LLOGLN(10, ("rdpPutImage:"));
-    dev = rdpGetDevFromScreen(pGC->pScreen);
-    if ((x == 0) && (y == 0) && (w == 4) && (h == 4) && (depth == 24))
+    pScreen = pGC->pScreen;
+    dev = rdpGetDevFromScreen(pScreen);
+    if ((x == 0) && (y == 0) && (w == 4) && (h == 4) && (depth >= 24) &&
+        (pDst->type == DRAWABLE_PIXMAP))
     {
-        int *pBits32 = (int *) pBits;
+        pBits32 = (int *) pBits;
         if (pBits32[0] == 0xDEADBEEF)
         {
-            rdpClientCon *clientCon = dev->clientConHead;
+            clientCon = dev->clientConHead;
             while (clientCon != NULL)
             {
                 if (clientCon->conNumber == pBits32[1])
                 {
+                    /* free old */
+                    pixmap = clientCon->helperPixmaps[pBits32[2] & 0xF];
+                    if (pixmap != NULL)
+                    {
+                        pScreen->DestroyPixmap(pixmap);
+                    }
+                    /* set new */
+                    pixmap = (PixmapPtr) pDst;
                     LLOGLN(0, ("rdpPutImage: setting conNumber %d, monitor num %d "
-                           "to pixmap %p", pBits32[1], pBits32[2], pDst));
-                    clientCon->helperPixmaps[pBits32[2] & 0xF] = (PixmapPtr) pDst;
+                           "to pixmap %p", pBits32[1], pBits32[2], pixmap));
+                    clientCon->helperPixmaps[pBits32[2] & 0xF] = pixmap;
+                    /* so it can not get freed early */
+                    pixmap->refcnt++;
                     break;
                 }
                 clientCon = clientCon->next;
