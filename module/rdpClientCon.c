@@ -359,6 +359,9 @@ rdpDeferredIdleDisconnectCallback(OsTimerPtr timer, CARD32 now, pointer arg)
 /*****************************************************************************/
 static int
 rdpShutdownHelper(rdpPtr dev, rdpClientCon *clientCon) {
+    ScreenPtr pScreen;
+    PixmapPtr pPixmap;
+
     LLOGLN(0, ("rdpShutdownHelper:"));
     if (clientCon->helper_pid <= 0)
     {
@@ -371,6 +374,15 @@ rdpShutdownHelper(rdpPtr dev, rdpClientCon *clientCon) {
         kill(clientCon->helper_pid, SIGTERM);
         waitpid(clientCon->helper_pid, &exit_code, 0);
     }
+    pScreen = clientCon->dev->pScreen;
+    for (index = 0; index < 16; index++)
+    {
+        pPixmap = clientCon->helperPixmaps[index];
+        if (pPixmap != NULL)
+        {
+            pScreen->DestroyPixmap(pPixmap);
+        }
+    }
     clientCon->helper_pid = -1;
     return exit_code;
 }
@@ -380,8 +392,6 @@ static int
 rdpClientConDisconnect(rdpPtr dev, rdpClientCon *clientCon)
 {
     int index;
-    ScreenPtr pScreen;
-    PixmapPtr pPixmap;
 
     LLOGLN(0, ("rdpClientConDisconnect:"));
 
@@ -439,25 +449,6 @@ rdpClientConDisconnect(rdpPtr dev, rdpClientCon *clientCon)
         shmdt(clientCon->shmemptr);
     }
     rdpShutdownHelper(dev, clientCon);
-    if (clientCon->helper_pid > 0)
-    {
-        int exit_code;
-        if (waitpid(clientCon->helper_pid, &exit_code, WNOHANG) == 0)
-        {
-            /* still running */
-            kill(clientCon->helper_pid, SIGTERM);
-            waitpid(clientCon->helper_pid, &exit_code, 0);
-        }
-    }
-    pScreen = clientCon->dev->pScreen;
-    for (index = 0; index < 16; index++)
-    {
-        pPixmap = clientCon->helperPixmaps[index];
-        if (pPixmap != NULL)
-        {
-            pScreen->DestroyPixmap(pPixmap);
-        }
-    }
     free(clientCon);
     return 0;
 }

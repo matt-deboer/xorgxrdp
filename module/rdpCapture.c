@@ -1461,20 +1461,16 @@ copy_vmem_nvidia(rdpClientCon *clientCon, RegionPtr in_reg)
             height = pbox[index].y2 - pbox[index].y1;
             if ((width > 0) && (height > 0))
             {
-
-                //copyGC->ops->CopyArea(&(hwPixmap->drawable),
-                //                      &(swPixmap->drawable),
-                //                      copyGC, left, top,
-                //                      width, height, left, top);
-                if (helperPixmap != NULL)
+                if (helperPixmap == NULL) 
+                {
+                    copyGC->ops->CopyArea(&(hwPixmap->drawable),
+                                          &(swPixmap->drawable),
+                                          copyGC, left, top,
+                                          width, height, left, top);
+                } else
                 {
                     copyGC->ops->CopyArea(&(hwPixmap->drawable),
                                           &(helperPixmap->drawable),
-                                          copyGC, left, top,
-                                          width, height, left, top);
-                } else {
-                    copyGC->ops->CopyArea(&(hwPixmap->drawable),
-                                          &(swPixmap->drawable),
                                           copyGC, left, top,
                                           width, height, left, top);
                 }
