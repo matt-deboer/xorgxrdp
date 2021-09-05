@@ -361,6 +361,7 @@ static int
 rdpShutdownHelper(rdpPtr dev, rdpClientCon *clientCon) {
     ScreenPtr pScreen;
     PixmapPtr pPixmap;
+    int index;
 
     LLOGLN(0, ("rdpShutdownHelper:"));
     if (clientCon->helper_pid <= 0)
@@ -2768,7 +2769,7 @@ rdpScheduleDeferredUpdate(rdpClientCon *clientCon, Bool can_call_now)
     /* use two separate delays in order to limit the update rate and wait a bit
        for more changes before sending an update. Always waiting the longer
        delay would introduce unnecessarily much latency. */
-    msToWait = retrying == 1 ? MS_TO_WAIT_FOR_RETRY_UPDATE : MIN_MS_TO_WAIT_FOR_MORE_UPDATES;
+    msToWait = MIN_MS_TO_WAIT_FOR_MORE_UPDATES;
     minNextUpdateTime = clientCon->lastUpdateTime + MIN_MS_BETWEEN_FRAMES;
     /* the first check is to gracefully handle the infrequent case of
        the time wrapping around */

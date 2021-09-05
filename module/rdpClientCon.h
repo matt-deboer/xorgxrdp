@@ -115,8 +115,6 @@ struct _rdpClientCon
 
     PixmapPtr helperPixmaps[16];
 
-    PixmapPtr helperPixmaps[16];
-
     OsTimerPtr updateTimer;
     CARD32 lastUpdateTime; /* millisecond timestamp */
     int updateScheduled; /* boolean */
