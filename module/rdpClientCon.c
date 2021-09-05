@@ -106,7 +106,7 @@ rdpClientConDisconnect(rdpPtr dev, rdpClientCon *clientCon);
 static CARD32
 rdpDeferredIdleDisconnectCallback(OsTimerPtr timer, CARD32 now, pointer arg);
 static void
-rdpScheduleDeferredUpdate(rdpClientCon *clientCon, int retrying);
+rdpScheduleDeferredUpdate(rdpClientCon *clientCon, Bool can_call_now);
 
 #if XORG_VERSION_CURRENT < XORG_VERSION_NUMERIC(1, 18, 5, 0, 0)
 
@@ -380,6 +380,8 @@ static int
 rdpClientConDisconnect(rdpPtr dev, rdpClientCon *clientCon)
 {
     int index;
+    ScreenPtr pScreen;
+    PixmapPtr pPixmap;
 
     LLOGLN(0, ("rdpClientConDisconnect:"));
 
@@ -437,6 +439,25 @@ rdpClientConDisconnect(rdpPtr dev, rdpClientCon *clientCon)
         shmdt(clientCon->shmemptr);
     }
     rdpShutdownHelper(dev, clientCon);
+    if (clientCon->helper_pid > 0)
+    {
+        int exit_code;
+        if (waitpid(clientCon->helper_pid, &exit_code, WNOHANG) == 0)
+        {
+            /* still running */
+            kill(clientCon->helper_pid, SIGTERM);
+            waitpid(clientCon->helper_pid, &exit_code, 0);
+        }
+    }
+    pScreen = clientCon->dev->pScreen;
+    for (index = 0; index < 16; index++)
+    {
+        pPixmap = clientCon->helperPixmaps[index];
+        if (pPixmap != NULL)
+        {
+            pScreen->DestroyPixmap(pPixmap);
+        }
+    }
     free(clientCon);
     return 0;
 }
@@ -859,7 +880,6 @@ rdpStartHelper(rdpPtr dev, rdpClientCon *clientCon)
     }
 
     socketpair(AF_UNIX, SOCK_STREAM, 0, spair);
-
     clientCon->helper_pid = fork();
     if (clientCon->helper_pid == -1)
     {
@@ -1037,6 +1057,10 @@ rdpClientConProcessMsgClientInfo(rdpPtr dev, rdpClientCon *clientCon)
             shmdt(clientCon->shmemptr);
         }
         bytes = clientCon->cap_width * clientCon->cap_height * 2;
+        if (clientCon->client_info.capture_format == XRDP_yuv444_709fr)
+        {
+            bytes = clientCon->cap_width * clientCon->cap_height * 4;
+        }
         clientCon->shmemid = shmget(IPC_PRIVATE, bytes, IPC_CREAT | 0777);
         clientCon->shmemptr = shmat(clientCon->shmemid, 0, 0);
         shmctl(clientCon->shmemid, IPC_RMID, NULL);
@@ -2616,7 +2640,6 @@ rdpDeferredUpdateCallback(OsTimerPtr timer, CARD32 now, pointer arg)
     LLOGLN(10, ("rdpDeferredUpdateCallback:"));
     clientCon = (rdpClientCon *) arg;
     clientCon->updateScheduled = FALSE;
-    clientCon->lastUpdateTime = now;
 
     if (clientCon->suppress_output)
     {
@@ -2634,14 +2657,15 @@ rdpDeferredUpdateCallback(OsTimerPtr timer, CARD32 now, pointer arg)
         /* do not allow captures until we have the client_info */
         clientCon->client_info.size == 0)
     {
-        LLOGLN(0, ("rdpDeferredUpdateCallback: reschedule rect_id %d "
-               "rect_id_ack %d, retries: %d",
-               clientCon->rect_id, clientCon->rect_id_ack, clientCon->retries));
-        rdpScheduleDeferredUpdate(clientCon, 1);
+        LLOGLN(10, ("rdpDeferredUpdateCallback: reschedule rect_id %d "
+               "rect_id_ack %d",
+               clientCon->rect_id, clientCon->rect_id_ack));
+        rdpScheduleDeferredUpdate(clientCon, FALSE);
         return 0;
     }
     LLOGLN(10, ("rdpDeferredUpdateCallback: sending"));
     clientCon->retries = 0;
+    clientCon->lastUpdateTime = now;
     rdpClientConGetScreenImageRect(clientCon->dev, clientCon, &id);
     LLOGLN(10, ("rdpDeferredUpdateCallback: rdp_width %d rdp_height %d "
            "rdp_Bpp %d screen width %d screen height %d",
@@ -2728,7 +2752,7 @@ rdpDeferredUpdateCallback(OsTimerPtr timer, CARD32 now, pointer arg)
     }
     if (rdpRegionNotEmpty(clientCon->dirtyRegion))
     {
-        rdpScheduleDeferredUpdate(clientCon, 0);
+        rdpScheduleDeferredUpdate(clientCon, FALSE);
     }
     return 0;
 }
@@ -2737,9 +2761,8 @@ rdpDeferredUpdateCallback(OsTimerPtr timer, CARD32 now, pointer arg)
 /******************************************************************************/
 #define MIN_MS_BETWEEN_FRAMES 40
 #define MIN_MS_TO_WAIT_FOR_MORE_UPDATES 0
-#define MS_TO_WAIT_FOR_RETRY_UPDATE 4
 static void
-rdpScheduleDeferredUpdate(rdpClientCon *clientCon, int retrying)
+rdpScheduleDeferredUpdate(rdpClientCon *clientCon, Bool can_call_now)
 {
     uint32_t curTime;
     uint32_t msToWait;
@@ -2763,13 +2786,17 @@ rdpScheduleDeferredUpdate(rdpClientCon *clientCon, int retrying)
     {
         msToWait = minNextUpdateTime - curTime;
     }
-
     ++clientCon->retries;
     if (msToWait < 1)
     {
-        LLOGLN(10, ("rdpScheduleDeferredUpdate: now"));
-        rdpDeferredUpdateCallback(clientCon->updateTimer, curTime, clientCon);
-        return;
+        if (can_call_now)
+        {
+            LLOGLN(10, ("rdpScheduleDeferredUpdate: now"));
+            rdpDeferredUpdateCallback(clientCon->updateTimer, curTime,
+                                      clientCon);
+            return;
+        }
+        msToWait = 1;
     }
     clientCon->updateScheduled = TRUE;
     clientCon->updateTimer = TimerSet(clientCon->updateTimer, 0,
@@ -2787,7 +2814,7 @@ rdpClientConAddDirtyScreenReg(rdpPtr dev, rdpClientCon *clientCon,
     rdpRegionUnion(clientCon->dirtyRegion, clientCon->dirtyRegion, reg);
     if (clientCon->updateScheduled == FALSE)
     {
-        rdpScheduleDeferredUpdate(clientCon, 0);
+        rdpScheduleDeferredUpdate(clientCon, TRUE);
     }
     return 0;
 }

@@ -84,6 +84,9 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 /* XRDP_nv12_709fr */
 #define XRDP_nv12_709fr \
 ((12 << 24) | (66 << 16) | (0 << 12) | (0 << 8) | (0 << 4) | 0)
+/* XRDP_yuv444_709fr */
+#define XRDP_yuv444_709fr \
+((32 << 24) | (67 << 16) | (0 << 12) | (0 << 8) | (0 << 4) | 0)
 
 #define PixelToMM(_size, _dpi) (((_size) * 254 + (_dpi) * 5) / ((_dpi) * 10))
 
