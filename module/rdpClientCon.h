@@ -49,6 +49,14 @@ struct rdpup_os_bitmap
     int stamp;
 };
 
+enum shared_memory_status {
+    SHM_UNINITIALIZED = 0,
+    SHM_RESIZING,
+    SHM_ACTIVE,
+    SHM_RFX_ACTIVE,
+    SHM_H264_ACTIVE
+};
+
 /* one of these for each client */
 struct _rdpClientCon
 {
@@ -103,12 +111,14 @@ struct _rdpClientCon
     RegionPtr shmRegion;
     int rect_id;
     int rect_id_ack;
+    enum shared_memory_status shmemstatus;
 
     PixmapPtr helperPixmaps[16];
 
     OsTimerPtr updateTimer;
     CARD32 lastUpdateTime; /* millisecond timestamp */
     int updateScheduled; /* boolean */
+    int updateRetries;
 
     RegionPtr dirtyRegion;
 
