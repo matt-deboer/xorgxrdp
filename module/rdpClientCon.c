@@ -836,6 +836,7 @@ rdpClientConProcessMsgClientInput(rdpPtr dev, rdpClientCon *clientCon)
         y = param1 & 0xffff;
         cx = (param2 >> 16) & 0xffff;
         cy = param2 & 0xffff;
+        clientCon->rect_id = 0;
         LLOGLN(0, ("rdpClientConProcessMsgClientInput: invalidate x %d y %d "
                "cx %d cy %d", x, y, cx, cy));
         rdpClientConAddDirtyScreen(dev, clientCon, x, y, cx, cy);
@@ -890,12 +891,8 @@ rdpStartHelper(rdpPtr dev, rdpClientCon *clientCon)
             }
         }
         open("/dev/null", O_RDWR);
-        snprintf(text, 63, "%s/.xorgxrdp_helper-%s-stdout.log", getenv("HOME"), display);
-        text[63] = 0;
-        open(text, O_RDWR | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
-        snprintf(text, 63, "%s/.xorgxrdp_helper-%s-stderr.log", getenv("HOME"), display);
-        text[63] = 0;
-        open(text, O_RDWR | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
+        open("/dev/null", O_RDWR);
+        open("/dev/null", O_RDWR);
         snprintf(text, 63, ":%s", display);
         text[63] = 0;
         setenv("DISPLAY", text, 1);
@@ -906,7 +903,6 @@ rdpStartHelper(rdpPtr dev, rdpClientCon *clientCon)
         text[63] = 0;
         setenv("XORGXRDP_XRDP_FD", text, 1);
         execlp("/usr/local/bin/xorgxrdp_helper", "/usr/local/bin/xorgxrdp_helper", "-d", (void *) 0);
-        LLOGLN(0, ("rdpClientConProcessMsgClientInfo: failed to execute helper"));
         exit(0);
     }
     else
@@ -2537,12 +2533,12 @@ rdpClientConSendPaintRectShmEx(rdpPtr dev, rdpClientCon *clientCon,
     }
 
     out_uint32_le(s, 0);
-    clientCon->rect_id++;
     out_uint32_le(s, clientCon->rect_id);
     out_uint32_le(s, id->shmem_id);
     out_uint32_le(s, id->shmem_offset);
     out_uint16_le(s, clientCon->cap_width);
     out_uint16_le(s, clientCon->cap_height);
+    clientCon->rect_id++;
 
     rdpClientConEndUpdate(dev, clientCon);
 
@@ -2971,7 +2967,6 @@ rdpClientConSendArea(rdpPtr dev, rdpClientCon *clientCon,
             out_uint16_le(s, w);
             out_uint16_le(s, h);
             out_uint32_le(s, 0);
-            clientCon->rect_id++;
             out_uint32_le(s, clientCon->rect_id);
             out_uint32_le(s, id->shmem_id);
             out_uint32_le(s, id->shmem_offset);
@@ -2979,6 +2974,8 @@ rdpClientConSendArea(rdpPtr dev, rdpClientCon *clientCon,
             out_uint16_le(s, id->height);
             out_uint16_le(s, x);
             out_uint16_le(s, y);
+
+            clientCon->rect_id++;
             rdpRegionUnionRect(clientCon->shmRegion, &box);
             return;
         }
