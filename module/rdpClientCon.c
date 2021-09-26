@@ -824,6 +824,7 @@ rdpClientConProcessMsgClientInput(rdpPtr dev, rdpClientCon *clientCon)
         y = param1 & 0xffff;
         cx = (param2 >> 16) & 0xffff;
         cy = param2 & 0xffff;
+        clientCon->rect_id = 0;
         LLOGLN(0, ("rdpClientConProcessMsgClientInput: invalidate x %d y %d "
                "cx %d cy %d", x, y, cx, cy));
         rdpClientConAddDirtyScreen(dev, clientCon, x, y, cx, cy);
@@ -2496,7 +2497,7 @@ rdpClientConSendPaintRectShmEx(rdpPtr dev, rdpClientCon *clientCon,
     }
 
     out_uint32_le(s, 0);
-    clientCon->rect_id++;
+    ++clientCon->rect_id;
     out_uint32_le(s, clientCon->rect_id);
     out_uint32_le(s, id->shmem_id);
     out_uint32_le(s, id->shmem_offset);
@@ -2921,7 +2922,7 @@ rdpClientConSendArea(rdpPtr dev, rdpClientCon *clientCon,
             out_uint16_le(s, w);
             out_uint16_le(s, h);
             out_uint32_le(s, 0);
-            clientCon->rect_id++;
+            ++clientCon->rect_id;
             out_uint32_le(s, clientCon->rect_id);
             out_uint32_le(s, id->shmem_id);
             out_uint32_le(s, id->shmem_offset);
