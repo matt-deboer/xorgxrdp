@@ -118,7 +118,7 @@ struct _rdpClientCon
     OsTimerPtr updateTimer;
     CARD32 lastUpdateTime; /* millisecond timestamp */
     int updateScheduled; /* boolean */
-    int retries;
+    int updateRetries;
 
     RegionPtr dirtyRegion;
 

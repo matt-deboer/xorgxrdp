@@ -52,6 +52,7 @@ Client connection to xrdp
 #include "rdpReg.h"
 #include "rdpCapture.h"
 #include "rdpRandR.h"
+#include <limits.h>
 
 #define LOG_LEVEL 1
 #define LLOGLN(_level, _args) \
@@ -214,7 +215,7 @@ rdpClientConGotConnection(ScreenPtr pScreen, rdpPtr dev)
     LLOGLN(0, ("rdpClientConGotConnection:"));
     clientCon = g_new0(rdpClientCon, 1);
     clientCon->shmemstatus = SHM_UNINITIALIZED;
-    clientCon->retries = 0;
+    clientCon->updateRetries = 0;
     clientCon->dev = dev;
     dev->last_event_time_ms = GetTimeInMillis();
     dev->do_dirty_ons = 1;
@@ -272,6 +273,8 @@ rdpClientConGotConnection(ScreenPtr pScreen, rdpPtr dev)
 
     clientCon->dirtyRegion = rdpRegionCreate(NullBox, 0);
     clientCon->shmRegion = rdpRegionCreate(NullBox, 0);
+
+    rdpClientConAddDirtyScreen(dev, clientCon, 0, 0, clientCon->rdp_width, clientCon->rdp_height);
 
     return 0;
 }
@@ -2231,7 +2234,7 @@ rdpClientConAddOsBitmap(rdpPtr dev, rdpClientCon *clientCon,
         return -1;
     }
 
-    oldest = 0x7fffffff;
+    oldest = INT_MAX;
     oldest_index = -1;
     rv = -1;
     index = 0;
@@ -2299,7 +2302,7 @@ rdpClientConAddOsBitmap(rdpPtr dev, rdpClientCon *clientCon,
                "clientCon->osBitmapNumUsed %d",
                clientCon->osBitmapNumUsed));
         /* find oldest */
-        oldest = 0x7fffffff;
+        oldest = INT_MAX;
         oldest_index = -1;
         index = 0;
         while (index < clientCon->maxOsBitmaps)
@@ -2652,7 +2655,7 @@ rdpDeferredUpdateCallback(OsTimerPtr timer, CARD32 now, pointer arg)
         return 0;
     }
     LLOGLN(10, ("rdpDeferredUpdateCallback: sending"));
-    clientCon->retries = 0;
+    clientCon->updateRetries = 0;
     clientCon->lastUpdateTime = now;
     rdpClientConGetScreenImageRect(clientCon->dev, clientCon, &id);
     LLOGLN(10, ("rdpDeferredUpdateCallback: rdp_width %d rdp_height %d "
@@ -2749,6 +2752,7 @@ rdpDeferredUpdateCallback(OsTimerPtr timer, CARD32 now, pointer arg)
 /******************************************************************************/
 #define MIN_MS_BETWEEN_FRAMES 40
 #define MIN_MS_TO_WAIT_FOR_MORE_UPDATES 0
+#define UPDATE_RETRY_TIMEOUT 200 // After this number of retries, give up and perform the capture anyway. This prevents an infinite loop.
 static void
 rdpScheduleDeferredUpdate(rdpClientCon *clientCon, Bool can_call_now)
 {
@@ -2756,9 +2760,11 @@ rdpScheduleDeferredUpdate(rdpClientCon *clientCon, Bool can_call_now)
     uint32_t msToWait;
     uint32_t minNextUpdateTime;
 
-    if (clientCon->retries > 100) {
-        LLOGLN(0, ("rdpScheduleDeferredUpdate: clientCon->retries is %d and has exceeded timeout. Overriding rect_id_ack.", clientCon->retries));
-        clientCon->rect_id_ack = 0x7FFFFFFF;
+    if (clientCon->updateRetries > UPDATE_RETRY_TIMEOUT) {
+        LLOGLN(0, ("rdpScheduleDeferredUpdate: clientCon->updateRetries is %d"
+                    " and has exceeded the timeout of %d retries."
+                    " Overriding rect_id_ack to INT_MAX.", clientCon->updateRetries, UPDATE_RETRY_TIMEOUT));
+        clientCon->rect_id_ack = INT_MAX;
     }
 
     curTime = (uint32_t) GetTimeInMillis();
@@ -2774,7 +2780,6 @@ rdpScheduleDeferredUpdate(rdpClientCon *clientCon, Bool can_call_now)
     {
         msToWait = minNextUpdateTime - curTime;
     }
-    ++clientCon->retries;
     if (msToWait < 1)
     {
         if (can_call_now)
@@ -2791,6 +2796,7 @@ rdpScheduleDeferredUpdate(rdpClientCon *clientCon, Bool can_call_now)
                                       (CARD32) msToWait,
                                       rdpDeferredUpdateCallback,
                                       clientCon);
+    ++clientCon->updateRetries;
 }
 
 /******************************************************************************/
