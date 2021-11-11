@@ -2536,12 +2536,12 @@ rdpClientConSendPaintRectShmEx(rdpPtr dev, rdpClientCon *clientCon,
     }
 
     out_uint32_le(s, 0);
+    ++clientCon->rect_id;
     out_uint32_le(s, clientCon->rect_id);
     out_uint32_le(s, id->shmem_id);
     out_uint32_le(s, id->shmem_offset);
     out_uint16_le(s, clientCon->cap_width);
     out_uint16_le(s, clientCon->cap_height);
-    ++clientCon->rect_id;
 
     rdpClientConEndUpdate(dev, clientCon);
 
@@ -2973,6 +2973,7 @@ rdpClientConSendArea(rdpPtr dev, rdpClientCon *clientCon,
             out_uint16_le(s, w);
             out_uint16_le(s, h);
             out_uint32_le(s, 0);
+            ++clientCon->rect_id;
             out_uint32_le(s, clientCon->rect_id);
             out_uint32_le(s, id->shmem_id);
             out_uint32_le(s, id->shmem_offset);
@@ -2980,8 +2981,6 @@ rdpClientConSendArea(rdpPtr dev, rdpClientCon *clientCon,
             out_uint16_le(s, id->height);
             out_uint16_le(s, x);
             out_uint16_le(s, y);
-
-            ++clientCon->rect_id;
             rdpRegionUnionRect(clientCon->shmRegion, &box);
             return;
         }
