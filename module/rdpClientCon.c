@@ -916,6 +916,7 @@ rdpStartHelper(rdpPtr dev, rdpClientCon *clientCon)
         close(clientCon->sck);
         close(spair[0]);
         clientCon->sck = spair[1];
+        g_sck_set_non_blocking(clientCon->sck);
         rdpClientConAddEnabledDevice(dev->pScreen, clientCon->sck);
     }
     return 0;
@@ -1183,11 +1184,17 @@ rdpClientConProcessMsgClientInfo(rdpPtr dev, rdpClientCon *clientCon)
         clientCon->shmemstatus = shmemstatus;
     }
 
-    if (dev->glamor || dev->nvidia)
-    {
-        rdpStartHelper(dev, clientCon);
-        rdpSendHelperMonitors(dev, clientCon);
-    }
+    /* if (dev->glamor || dev->nvidia) */
+    /* currently only nvenc and h264 is supported */
+    //if ((dev->nvidia || dev->glamor) &&
+    //   (clientCon->client_info.capture_code == 3))
+    //{
+    //    if (getenv("XRDP_USE_HELPER") != NULL)
+    //    {
+    rdpStartHelper(dev, clientCon);
+    rdpSendHelperMonitors(dev, clientCon);
+    //    }
+    //}
 
     return 0;
 }
@@ -2535,7 +2542,7 @@ rdpClientConSendPaintRectShmEx(rdpPtr dev, rdpClientCon *clientCon,
         out_uint16_le(s, cy);
     }
 
-    out_uint32_le(s, 0);
+    out_uint32_le(s, id->flags);
     ++clientCon->rect_id;
     out_uint32_le(s, clientCon->rect_id);
     out_uint32_le(s, id->shmem_id);
@@ -2851,6 +2858,7 @@ rdpClientConGetScreenImageRect(rdpPtr dev, rdpClientCon *clientCon,
     id->bpp = clientCon->rdp_bpp;
     id->Bpp = clientCon->rdp_Bpp;
     id->lineBytes = dev->paddedWidthInBytes;
+    id->flags = 0;
     id->pixels = dev->pfbMemory;
     id->shmem_pixels = clientCon->shmemptr;
     id->shmem_id = clientCon->shmemid;
@@ -2868,6 +2876,7 @@ rdpClientConGetPixmapImageRect(rdpPtr dev, rdpClientCon *clientCon,
     id->bpp = clientCon->rdp_bpp;
     id->Bpp = clientCon->rdp_Bpp;
     id->lineBytes = pPixmap->devKind;
+    id->flags = 0;
     id->pixels = (uint8_t *)(pPixmap->devPrivate.ptr);
     id->shmem_pixels = 0;
     id->shmem_id = 0;

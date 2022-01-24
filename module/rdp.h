@@ -127,6 +127,7 @@ struct image_data
     int bpp;
     int Bpp;
     int lineBytes;
+    int flags;
     uint8_t *pixels;
     uint8_t *shmem_pixels;
     int shmem_id;
