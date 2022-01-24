@@ -1184,17 +1184,16 @@ rdpClientConProcessMsgClientInfo(rdpPtr dev, rdpClientCon *clientCon)
         clientCon->shmemstatus = shmemstatus;
     }
 
-    /* if (dev->glamor || dev->nvidia) */
     /* currently only nvenc and h264 is supported */
-    //if ((dev->nvidia || dev->glamor) &&
-    //   (clientCon->client_info.capture_code == 3))
-    //{
-    //    if (getenv("XRDP_USE_HELPER") != NULL)
-    //    {
-    rdpStartHelper(dev, clientCon);
-    rdpSendHelperMonitors(dev, clientCon);
-    //    }
-    //}
+    if ((dev->nvidia || dev->glamor) &&
+       (clientCon->client_info.capture_code == 3))
+    {
+        if (getenv("XRDP_USE_HELPER") != NULL)
+        {
+            rdpStartHelper(dev, clientCon);
+            rdpSendHelperMonitors(dev, clientCon);
+        }
+    }
 
     return 0;
 }
