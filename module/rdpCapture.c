@@ -1428,6 +1428,14 @@ rdpCapture3(rdpClientCon *clientCon, RegionPtr in_reg, BoxPtr *out_rects,
                                         dst, dst_stride, 0, 0,
                                         *out_rects, num_rects);
     }
+    else if (dst_format == XRDP_yuv444_709fr)
+    {
+        rdpCopyBox_a8r8g8b8_to_yuv444_709fr(clientCon,
+                                            src, src_stride, 0, 0,
+                                            dst, dst_stride,
+                                            0, 0,
+                                            *out_rects, num_rects);
+    }
     else if (dst_format == XRDP_nv12_709fr)
     {
         dst_uv = dst;
