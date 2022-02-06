@@ -46,6 +46,15 @@ rdp module main
 #include <xf86xv.h>
 #include <xf86Crtc.h>
 
+#if XORG_VERSION_CURRENT < XORG_VERSION_NUMERIC(21, 1, 4, 0, 0)
+#define XACE_DISABLE_DRI3_PRESENT
+#endif
+
+#ifdef XACE_DISABLE_DRI3_PRESENT
+#include <xacestr.h>
+#include <xace.h>
+#endif
+
 #include "rdp.h"
 #include "rdpInput.h"
 #include "rdpDraw.h"
@@ -208,6 +217,27 @@ xorgxrdpDamageDestroy(DamagePtr pDamage, void *closure)
     LLOGLN(0, ("xorgxrdpDamageDestroy:"));
 }
 
+#ifdef XACE_DISABLE_DRI3_PRESENT
+/*****************************************************************************/
+static void
+xorgxrdpExtension(CallbackListPtr *pcbl, void *unused, void *calldata)
+{
+    XaceExtAccessRec *rec = calldata;
+    LLOGLN(10, ("xorgxrdpExtension:"));
+    LLOGLN(10, ("  name %s", rec->ext->name));
+    if (strcmp(rec->ext->name, "DRI3") == 0)
+    {
+        LLOGLN(10, ("  disabling name %s", rec->ext->name));
+        rec->status = BadValue;
+    }
+    if (strcmp(rec->ext->name, "Present") == 0)
+    {
+        LLOGLN(10, ("  disabling name %s", rec->ext->name));
+        rec->status = BadValue;
+    }
+}
+#endif
+
 /******************************************************************************/
 /* returns error */
 static CARD32
@@ -231,6 +261,12 @@ xorgxrdpDeferredStartup(OsTimerPtr timer, CARD32 now, pointer arg)
             LLOGLN(0, ("xorgxrdpSetupDamage: DamageRegister ok"));
             TimerFree(g_timer);
             g_timer = NULL;
+#ifdef XACE_DISABLE_DRI3_PRESENT
+            if (getenv("XORGXRDP_NO_XACE_DISABLE_DRI3_PRESENT") == NULL)
+            {
+                XaceRegisterCallback(XACE_EXT_ACCESS, xorgxrdpExtension, NULL);
+            }
+#endif
             return 0;
         }
     }
