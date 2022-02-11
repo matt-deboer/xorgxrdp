@@ -826,6 +826,8 @@ rdpCopyBoxList(rdpClientCon *clientCon, PixmapPtr dstPixmap,
     char pix1[16];
     rdpPtr dev;
 
+    LLOGLN(10, ("rdpCopyBoxList:"));
+
     dev = clientCon->dev;
     pScreen = dev->pScreen;
     hwPixmap = pScreen->GetScreenPixmap(pScreen);
@@ -865,6 +867,19 @@ rdpCopyBoxList(rdpClientCon *clientCon, PixmapPtr dstPixmap,
 
 /******************************************************************************/
 static Bool
+isShmStatusActive(enum shared_memory_status status) {
+    switch (status) {
+        case SHM_ACTIVE:
+        case SHM_RFX_ACTIVE:
+        case SHM_H264_ACTIVE:
+            return TRUE;
+        default:
+            return FALSE;
+    }
+}
+
+/******************************************************************************/
+static Bool
 rdpCapture0(rdpClientCon *clientCon, RegionPtr in_reg, BoxPtr *out_rects,
             int *num_out_rects, struct image_data *id)
 {
@@ -881,13 +896,12 @@ rdpCapture0(rdpClientCon *clientCon, RegionPtr in_reg, BoxPtr *out_rects,
 
     LLOGLN(10, ("rdpCapture0:"));
 
-    if (clientCon->shmemstatus == SHM_UNINITIALIZED || clientCon->shmemstatus == SHM_RESIZING) {
+    if (!isShmStatusActive(clientCon->shmemstatus)) {
         LLOGLN(0, ("rdpCapture0: WARNING -- Shared memory is not configured. Aborting capture!"));
         return FALSE;
     }
 
     rv = TRUE;
-
 
     num_rects = REGION_NUM_RECTS(in_reg);
     psrc_rects = REGION_RECTS(in_reg);
@@ -1001,7 +1015,7 @@ rdpCapture1(rdpClientCon *clientCon, RegionPtr in_reg, BoxPtr *out_rects,
 
     LLOGLN(10, ("rdpCapture1:"));
 
-    if (clientCon->shmemstatus == SHM_UNINITIALIZED || clientCon->shmemstatus == SHM_RESIZING) {
+    if (!isShmStatusActive(clientCon->shmemstatus)) {
         LLOGLN(0, ("rdpCapture1: WARNING -- Shared memory is not configured. Aborting capture!"));
         return FALSE;
     }
@@ -1348,7 +1362,7 @@ rdpCapture3(rdpClientCon *clientCon, RegionPtr in_reg, BoxPtr *out_rects,
 
     LLOGLN(10, ("rdpCapture3:"));
 
-    if (clientCon->shmemstatus == SHM_UNINITIALIZED || clientCon->shmemstatus == SHM_RESIZING) {
+    if (!isShmStatusActive(clientCon->shmemstatus)) {
         LLOGLN(0, ("rdpCapture3: WARNING -- Shared memory is not configured. Aborting capture!"));
         return FALSE;
     }

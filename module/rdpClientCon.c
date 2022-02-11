@@ -801,6 +801,21 @@ rdpClientConProcessScreenSizeMsg(rdpPtr dev, rdpClientCon *clientCon,
 }
 
 /******************************************************************************/
+static enum shared_memory_status
+convertSharedMemoryStatusToActive(enum shared_memory_status status) {
+    switch (status) {
+        case SHM_ACTIVE_PENDING:
+            return SHM_ACTIVE;
+        case SHM_RFX_ACTIVE_PENDING:
+            return SHM_RFX_ACTIVE;
+        case SHM_H264_ACTIVE_PENDING:
+            return SHM_H264_ACTIVE;
+        default:
+            return status;
+    }
+}
+
+/******************************************************************************/
 static int
 rdpClientConProcessMsgClientInput(rdpPtr dev, rdpClientCon *clientCon)
 {
@@ -840,8 +855,10 @@ rdpClientConProcessMsgClientInput(rdpPtr dev, rdpClientCon *clientCon)
         cx = (param2 >> 16) & 0xffff;
         cy = param2 & 0xffff;
         clientCon->rect_id = 0;
+        clientCon->rect_id_ack = INT_MAX;
         LLOGLN(0, ("rdpClientConProcessMsgClientInput: invalidate x %d y %d "
                "cx %d cy %d", x, y, cx, cy));
+        clientCon->shmemstatus = convertSharedMemoryStatusToActive(clientCon->shmemstatus);
         rdpClientConAddDirtyScreen(dev, clientCon, x, y, cx, cy);
     }
     else if (msg == 300) /* resize desktop */
@@ -871,7 +888,7 @@ rdpStartHelper(rdpPtr dev, rdpClientCon *clientCon)
     int index;
 
     // The helper is already running, don't attempt to initialize it again.
-    if (clientCon->helper_pid != 0) {
+    if (clientCon->helper_pid > 0) {
         return 0;
     }
 
@@ -986,7 +1003,7 @@ rdpClientConProcessMsgClientInfo(rdpPtr dev, rdpClientCon *clientCon)
     int i1;
     int index;
     BoxRec box;
-    enum shared_memory_status shmemstatus = SHM_ACTIVE;
+    enum shared_memory_status shmemstatus = SHM_ACTIVE_PENDING;
 
     LLOGLN(0, ("rdpClientConProcessMsgClientInfo:"));
     s = clientCon->in_s;
@@ -1035,7 +1052,7 @@ rdpClientConProcessMsgClientInfo(rdpPtr dev, rdpClientCon *clientCon)
                "bytes %d", clientCon->shmemid, clientCon->shmemptr, bytes));
         clientCon->shmem_lineBytes = clientCon->rdp_Bpp * clientCon->cap_width;
         clientCon->cap_stride_bytes = clientCon->cap_width * 4;
-        shmemstatus = SHM_RFX_ACTIVE;
+        shmemstatus = SHM_RFX_ACTIVE_PENDING;
     }
     else if (clientCon->client_info.capture_code == 3) /* H264 */
     {
@@ -1060,7 +1077,7 @@ rdpClientConProcessMsgClientInfo(rdpPtr dev, rdpClientCon *clientCon)
                "bytes %d", clientCon->shmemid, clientCon->shmemptr, bytes));
         clientCon->shmem_lineBytes = clientCon->rdp_Bpp * clientCon->cap_width;
         clientCon->cap_stride_bytes = clientCon->cap_width * 4;
-        shmemstatus = SHM_H264_ACTIVE;
+        shmemstatus = SHM_H264_ACTIVE_PENDING;
     }
 
     if (clientCon->client_info.capture_format != 0)
@@ -1180,10 +1197,6 @@ rdpClientConProcessMsgClientInfo(rdpPtr dev, rdpClientCon *clientCon)
     rdpInputKeyboardEvent(dev, 18, (long)(&(clientCon->client_info)),
                           0, 0, 0);
 
-    if (clientCon->shmemstatus == SHM_UNINITIALIZED || clientCon->shmemstatus == SHM_RESIZING) {
-        clientCon->shmemstatus = shmemstatus;
-    }
-
     /* currently only nvenc and h264 is supported */
     if ((dev->nvidia || dev->glamor) &&
        (clientCon->client_info.capture_code == 3))
@@ -1193,6 +1206,10 @@ rdpClientConProcessMsgClientInfo(rdpPtr dev, rdpClientCon *clientCon)
             rdpStartHelper(dev, clientCon);
             rdpSendHelperMonitors(dev, clientCon);
         }
+    }
+
+    if (clientCon->shmemstatus == SHM_UNINITIALIZED || clientCon->shmemstatus == SHM_RESIZING) {
+        clientCon->shmemstatus = shmemstatus;
     }
 
     return 0;
@@ -2757,7 +2774,7 @@ rdpDeferredUpdateCallback(OsTimerPtr timer, CARD32 now, pointer arg)
 
 /******************************************************************************/
 #define MIN_MS_BETWEEN_FRAMES 40
-#define MIN_MS_TO_WAIT_FOR_MORE_UPDATES 0
+#define MIN_MS_TO_WAIT_FOR_MORE_UPDATES 1
 #define UPDATE_RETRY_TIMEOUT 200 // After this number of retries, give up and perform the capture anyway. This prevents an infinite loop.
 static void
 rdpScheduleDeferredUpdate(rdpClientCon *clientCon, Bool can_call_now)
