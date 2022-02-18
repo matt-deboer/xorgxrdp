@@ -452,7 +452,9 @@ rdpClientConDisconnect(rdpPtr dev, rdpClientCon *clientCon)
     {
         shmdt(clientCon->shmemptr);
     }
-    rdpShutdownHelper(dev, clientCon);
+    if (getenv("XRDP_USE_HELPER") != NULL) {
+        rdpShutdownHelper(dev, clientCon);
+    }
     free(clientCon);
     return 0;
 }
