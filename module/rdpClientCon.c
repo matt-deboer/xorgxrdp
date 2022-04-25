@@ -465,6 +465,7 @@ static int
 rdpClientConSend(rdpPtr dev, rdpClientCon *clientCon, const char *data, int len)
 {
     int sent;
+    int retries = 0;
 
     LLOGLN(10, ("rdpClientConSend - sending %d bytes", len));
 
@@ -481,6 +482,12 @@ rdpClientConSend(rdpPtr dev, rdpClientCon *clientCon, const char *data, int len)
         {
             if (g_sck_last_error_would_block(clientCon->sck))
             {
+                // Just because we couldn't after 100 retries
+                // does not mean we're disconnected.
+                if (retries > 100) {
+                    return 0;
+                }
+                ++retries;
                 g_sleep(1);
             }
             else
