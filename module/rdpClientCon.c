@@ -33,6 +33,7 @@ Client connection to xrdp
 #include <sys/types.h>
 #include <sys/ipc.h>
 #include <sys/shm.h>
+#include <limits.h>
 
 /* this should be before all X11 .h files */
 #include <xorg-server.h>
@@ -212,6 +213,7 @@ rdpClientConGotConnection(ScreenPtr pScreen, rdpPtr dev)
     LLOGLN(0, ("rdpClientConGotConnection:"));
     clientCon = g_new0(rdpClientCon, 1);
     clientCon->shmemstatus = SHM_UNINITIALIZED;
+    clientCon->updateRetries = 0;
     clientCon->dev = dev;
     dev->last_event_time_ms = GetTimeInMillis();
     dev->do_dirty_ons = 1;
@@ -969,14 +971,32 @@ rdpClientConProcessMsgClientInfo(rdpPtr dev, rdpClientCon *clientCon)
     {
         LLOGLN(0, ("  client can not do new(color) cursor"));
     }
+/*
+    TODO: Temporary workaround intended to support two different versions of the xrdp_client_info.h
+    header due to a customer request. This should be removed as soon as convenient, probably before the next
+    release. See https://github.com/neutrinolabs/xorgxrdp/issues/217
+*/
+#if CLIENT_INFO_CURRENT_VERSION == 20210723
     if (clientCon->client_info.monitorCount > 0)
+#else
+    if (clientCon->client_info.display_sizes.monitorCount > 0)
+#endif
     {
         LLOGLN(0, ("  client can do multimon"));
+#if CLIENT_INFO_CURRENT_VERSION == 20210723
         LLOGLN(0, ("  client monitor data, monitorCount=%d", clientCon->client_info.monitorCount));
+#else
+        LLOGLN(0, ("  client monitor data, monitorCount=%d", clientCon->client_info.display_sizes.monitorCount));
+#endif
         clientCon->doMultimon = 1;
         dev->doMultimon = 1;
+#if CLIENT_INFO_CURRENT_VERSION == 20210723
         memcpy(dev->minfo, clientCon->client_info.minfo, sizeof(dev->minfo));
         dev->monitorCount = clientCon->client_info.monitorCount;
+#else
+        memcpy(dev->minfo, clientCon->client_info.display_sizes.minfo, sizeof(dev->minfo));
+        dev->monitorCount = clientCon->client_info.display_sizes.monitorCount;
+#endif
 
         box.x1 = dev->minfo[0].left;
         box.y1 = dev->minfo[0].top;
@@ -1023,6 +1043,8 @@ rdpClientConProcessMsgClientInfo(rdpPtr dev, rdpClientCon *clientCon)
     if (clientCon->shmemstatus == SHM_UNINITIALIZED || clientCon->shmemstatus == SHM_RESIZING) {
         clientCon->shmemstatus = shmemstatus;
     }
+
+    rdpClientConAddDirtyScreen(dev, clientCon, 0, 0, clientCon->rdp_width, clientCon->rdp_height);
 
     return 0;
 }
@@ -2069,7 +2091,7 @@ rdpClientConAddOsBitmap(rdpPtr dev, rdpClientCon *clientCon,
         return -1;
     }
 
-    oldest = 0x7fffffff;
+    oldest = INT_MAX;
     oldest_index = -1;
     rv = -1;
     index = 0;
@@ -2137,7 +2159,7 @@ rdpClientConAddOsBitmap(rdpPtr dev, rdpClientCon *clientCon,
                "clientCon->osBitmapNumUsed %d",
                clientCon->osBitmapNumUsed));
         /* find oldest */
-        oldest = 0x7fffffff;
+        oldest = INT_MAX;
         oldest_index = -1;
         index = 0;
         while (index < clientCon->maxOsBitmaps)
@@ -2479,10 +2501,8 @@ rdpDeferredUpdateCallback(OsTimerPtr timer, CARD32 now, pointer arg)
         rdpScheduleDeferredUpdate(clientCon);
         return 0;
     }
-    else
-    {
-        LLOGLN(10, ("rdpDeferredUpdateCallback: sending"));
-    }
+    LLOGLN(10, ("rdpDeferredUpdateCallback: sending"));
+    clientCon->updateRetries = 0;
     rdpClientConGetScreenImageRect(clientCon->dev, clientCon, &id);
     LLOGLN(10, ("rdpDeferredUpdateCallback: rdp_width %d rdp_height %d "
            "rdp_Bpp %d screen width %d screen height %d",
@@ -2578,12 +2598,20 @@ rdpDeferredUpdateCallback(OsTimerPtr timer, CARD32 now, pointer arg)
 /******************************************************************************/
 #define MIN_MS_BETWEEN_FRAMES 40
 #define MIN_MS_TO_WAIT_FOR_MORE_UPDATES 4
+#define UPDATE_RETRY_TIMEOUT 200 // After this number of retries, give up and perform the capture anyway. This prevents an infinite loop.
 static void
 rdpScheduleDeferredUpdate(rdpClientCon *clientCon)
 {
     uint32_t curTime;
     uint32_t msToWait;
     uint32_t minNextUpdateTime;
+
+    if (clientCon->updateRetries > UPDATE_RETRY_TIMEOUT) {
+        LLOGLN(10, ("rdpScheduleDeferredUpdate: clientCon->updateRetries is %d"
+                    " and has exceeded the timeout of %d retries."
+                    " Overriding rect_id_ack to INT_MAX.", clientCon->updateRetries, UPDATE_RETRY_TIMEOUT));
+        clientCon->rect_id_ack = INT_MAX;
+    }
 
     curTime = (uint32_t) GetTimeInMillis();
     /* use two separate delays in order to limit the update rate and wait a bit
@@ -2604,6 +2632,7 @@ rdpScheduleDeferredUpdate(rdpClientCon *clientCon)
                                       rdpDeferredUpdateCallback,
                                       clientCon);
     clientCon->updateScheduled = TRUE;
+    ++clientCon->updateRetries;
 }
 
 /******************************************************************************/

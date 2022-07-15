@@ -21,6 +21,13 @@ PACKAGES=" \
     nasm \
     "
 
+# Additional packages for glamor build
+PACKAGES="$PACKAGES \
+    libgbm-dev \
+    libepoxy-dev \
+    libegl1-mesa-dev \
+    "
+
 case "$ARCH"
 in
     amd64)
@@ -40,7 +47,8 @@ in
         ;;
 esac
 
-exec apt-get -yq \
+apt-get update
+apt-get -yq \
     --no-install-suggests \
     --no-install-recommends \
     $APT_EXTRA_ARGS \
